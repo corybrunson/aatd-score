@@ -2,9 +2,10 @@
 **/.DS_Store
 
 # R project
-
+.Rproj.user
 
 # raw & rendered files
 data-raw/
 ref/
+data/
 
