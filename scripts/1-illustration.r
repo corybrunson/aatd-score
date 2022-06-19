@@ -14,9 +14,17 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
   sample_frac(size = p_data) %>%
   print() ->
   aatd_data
+# genotypes to include in analysis
+read_rds(here::here("data/aatd-resp.rds")) %>%
+  count(genotype) %>%
+  filter(n > 120L) %>%
+  select(genotype) %>%
+  drop_na() ->
+  genotype_incl
 # join in responses
 read_rds(here::here("data/aatd-resp.rds")) %>%
   select(record_id, genotype) %>%
+  semi_join(genotype_incl) %>%
   mutate(
     genotype = ifelse(
       #genotype == "ZZ",
@@ -119,58 +127,84 @@ svm_linear() %>%
   #set_engine("LiblineaR") %>%
   set_engine("kernlab") %>%
   set_mode("classification") ->
-  aatd_lsvm_spec
+  aatd_svm1_spec
 
 # fit model
-aatd_lsvm_spec %>%
+aatd_svm1_spec %>%
   fit(genotype ~ ., bake(aatd_num_rec, NULL)) %>%
   print() ->
-  aatd_lsvm_fit
+  aatd_svm1_fit
 
 # evaluate model
 bind_cols(
-  predict(aatd_lsvm_fit, bake(aatd_num_rec, testing(aatd_split))),
-  predict(aatd_lsvm_fit, bake(aatd_num_rec, testing(aatd_split)), type = "prob")
+  predict(aatd_svm1_fit, bake(aatd_num_rec, testing(aatd_split))),
+  predict(aatd_svm1_fit, bake(aatd_num_rec, testing(aatd_split)), type = "prob")
 ) %>%
   bind_cols(select(testing(aatd_split), genotype)) %>%
   print() ->
-  aatd_lsvm_res
-aatd_lsvm_res %>%
+  aatd_svm1_res
+aatd_svm1_res %>%
   count(.pred_class, genotype)
-aatd_lsvm_res %>%
+aatd_svm1_res %>%
   metrics(truth = genotype, estimate = .pred_class, .pred_Abnormal)
 
-# polynomial SVM model specification
+# quadratic SVM model specification
+svm_poly(degree = 2L) %>%
+  set_engine("kernlab") %>%
+  set_mode("classification") ->
+  aatd_svm2_spec
+
+# fit model
+aatd_svm2_spec %>%
+  fit(genotype ~ ., bake(aatd_num_rec, NULL)) %>%
+  print() ->
+  aatd_svm2_fit
+
+# evaluate model
+bind_cols(
+  predict(aatd_svm2_fit, bake(aatd_num_rec, testing(aatd_split))),
+  predict(aatd_svm2_fit, bake(aatd_num_rec, testing(aatd_split)), type = "prob")
+) %>%
+  bind_cols(select(testing(aatd_split), genotype)) %>%
+  print() ->
+  aatd_svm2_res
+aatd_svm2_res %>%
+  count(.pred_class, genotype)
+aatd_svm2_res %>%
+  metrics(truth = genotype, estimate = .pred_class, .pred_Abnormal)
+
+# cubic SVM model specification
 svm_poly(degree = 3L) %>%
   set_engine("kernlab") %>%
   set_mode("classification") ->
-  aatd_psvm_spec
+  aatd_svm3_spec
 
 # fit model
-aatd_psvm_spec %>%
+aatd_svm3_spec %>%
   fit(genotype ~ ., bake(aatd_num_rec, NULL)) %>%
   print() ->
-  aatd_psvm_fit
+  aatd_svm3_fit
 
 # evaluate model
 bind_cols(
-  predict(aatd_psvm_fit, bake(aatd_num_rec, testing(aatd_split))),
-  predict(aatd_psvm_fit, bake(aatd_num_rec, testing(aatd_split)), type = "prob")
+  predict(aatd_svm3_fit, bake(aatd_num_rec, testing(aatd_split))),
+  predict(aatd_svm3_fit, bake(aatd_num_rec, testing(aatd_split)), type = "prob")
 ) %>%
   bind_cols(select(testing(aatd_split), genotype)) %>%
   print() ->
-  aatd_psvm_res
-aatd_psvm_res %>%
+  aatd_svm3_res
+aatd_svm3_res %>%
   count(.pred_class, genotype)
-aatd_psvm_res %>%
+aatd_svm3_res %>%
   metrics(truth = genotype, estimate = .pred_class, .pred_Abnormal)
 
 # compare ROC curves
 list(
   logistic_regression = aatd_lr_res,
   random_forest = aatd_rf_res,
-  linear_svm = aatd_lsvm_res,
-  polynomial_svm = aatd_psvm_res
+  linear_svm = aatd_svm1_res,
+  quadratic_svm = aatd_svm2_res,
+  cubic_svm = aatd_svm3_res
 ) %>%
   enframe(name = "model", value = "results") %>%
   mutate(model = fct_inorder(model)) %>%
@@ -185,8 +219,9 @@ ggsave(here::here("fig/aatd-roc.png"), aatd_roc)
 list(
   logistic_regression = aatd_lr_res,
   random_forest = aatd_rf_res,
-  linear_svm = aatd_lsvm_res,
-  polynomial_svm = aatd_psvm_res
+  linear_svm = aatd_svm1_res,
+  quadratic_svm = aatd_svm2_res,
+  cubic_svm = aatd_svm3_res
 ) %>%
   enframe(name = "model", value = "results") %>%
   mutate(model = fct_inorder(model)) %>%
