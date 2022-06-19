@@ -1,6 +1,13 @@
 library(tidyverse)
 library(tidymodels)
 
+#' 0. Setup
+
+# hyperparameters
+p_data <- 1/10
+n_folds <- 6L
+#n_folds <- 12L
+
 # load and subset predictors data
 read_rds(here::here("data/aatd-pred.rds")) %>%
   select(-race) %>%
@@ -16,24 +23,42 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
       genotype == "ZZ" | genotype == "SZ",
       "Abnormal", "Normal"
     ),
-    genotype = fct_infreq(genotype)
+    # make abnormal genotype the first factor level (outcome)
+    genotype = fct_rev(fct_infreq(genotype))
   ) %>%
   # remove missing responses
   drop_na() %>%
   inner_join(aatd_data, by = "record_id") ->
   aatd_data
 
+#' 1. Single-partition, fixed-parameter
+
 # initial partition
 aatd_split <- initial_split(aatd_data, prop = 2/3, strata = genotype)
 
-# prepare recipe
+# prepare regression recipe
 recipe(training(aatd_split), genotype ~ .) %>%
   # stop treating the ID as a predictor
   #update_role(record_id, new_role = "id variable") %>%
   step_rm(record_id) %>%
   prep() %>%
   print() ->
-  aatd_rec
+  aatd_reg_rec
+
+# prepare numeric recipe
+recipe(training(aatd_split), genotype ~ .) %>%
+  # stop treating the ID as a predictor
+  #update_role(record_id, new_role = "id variable") %>%
+  step_rm(record_id) %>%
+  # one-hot encoding of factors
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%
+  # binary encoding of logicals
+  step_mutate_at(has_type(match = "logical"), fn = ~ . * 2L - 1L) %>%
+  prep() %>%
+  print() ->
+  aatd_num_rec
+
+#' 1.1. Logistic regression
 
 # logistic regression model specification
 logistic_reg(penalty = 1) %>%
@@ -43,14 +68,14 @@ logistic_reg(penalty = 1) %>%
 
 # fit model
 aatd_lr_spec %>%
-  fit(genotype ~ ., bake(aatd_rec, NULL)) %>%
+  fit(genotype ~ ., bake(aatd_reg_rec, NULL)) %>%
   print() ->
   aatd_lr_fit
 
 # evaluate model
 bind_cols(
-  predict(aatd_lr_fit, bake(aatd_rec, testing(aatd_split))),
-  predict(aatd_lr_fit, bake(aatd_rec, testing(aatd_split)), type = "prob")
+  predict(aatd_lr_fit, bake(aatd_reg_rec, testing(aatd_split))),
+  predict(aatd_lr_fit, bake(aatd_reg_rec, testing(aatd_split)), type = "prob")
 ) %>%
   bind_cols(select(testing(aatd_split), genotype)) %>%
   print() ->
@@ -58,14 +83,125 @@ bind_cols(
 aatd_lr_res %>%
   count(.pred_class, genotype)
 aatd_lr_res %>%
-  metrics(truth = genotype, estimate = .pred_class, .pred_Normal)
+  metrics(truth = genotype, estimate = .pred_class, .pred_Abnormal)
+
+#' 1.2. Random forest classification
+
+# random forest model specification
+rand_forest(mtry = NULL, trees = 120L) %>%
+  set_engine("randomForest") %>%
+  set_mode("classification") ->
+  aatd_rf_spec
+
+# fit model
+aatd_rf_spec %>%
+  fit(genotype ~ ., bake(aatd_num_rec, NULL)) %>%
+  print() ->
+  aatd_rf_fit
+
+# evaluate model
+bind_cols(
+  predict(aatd_rf_fit, bake(aatd_num_rec, testing(aatd_split))),
+  predict(aatd_rf_fit, bake(aatd_num_rec, testing(aatd_split)), type = "prob")
+) %>%
+  bind_cols(select(testing(aatd_split), genotype)) %>%
+  print() ->
+  aatd_rf_res
+aatd_rf_res %>%
+  count(.pred_class, genotype)
+aatd_rf_res %>%
+  metrics(truth = genotype, estimate = .pred_class, .pred_Abnormal)
+
+#' 1.3. Support vector machine classification
+
+# linear SVM model specification
+svm_linear() %>%
+  #set_engine("LiblineaR") %>%
+  set_engine("kernlab") %>%
+  set_mode("classification") ->
+  aatd_lsvm_spec
+
+# fit model
+aatd_lsvm_spec %>%
+  fit(genotype ~ ., bake(aatd_num_rec, NULL)) %>%
+  print() ->
+  aatd_lsvm_fit
+
+# evaluate model
+bind_cols(
+  predict(aatd_lsvm_fit, bake(aatd_num_rec, testing(aatd_split))),
+  predict(aatd_lsvm_fit, bake(aatd_num_rec, testing(aatd_split)), type = "prob")
+) %>%
+  bind_cols(select(testing(aatd_split), genotype)) %>%
+  print() ->
+  aatd_lsvm_res
+aatd_lsvm_res %>%
+  count(.pred_class, genotype)
+aatd_lsvm_res %>%
+  metrics(truth = genotype, estimate = .pred_class, .pred_Abnormal)
+
+# polynomial SVM model specification
+svm_poly(degree = 3L) %>%
+  set_engine("kernlab") %>%
+  set_mode("classification") ->
+  aatd_psvm_spec
+
+# fit model
+aatd_psvm_spec %>%
+  fit(genotype ~ ., bake(aatd_num_rec, NULL)) %>%
+  print() ->
+  aatd_psvm_fit
+
+# evaluate model
+bind_cols(
+  predict(aatd_psvm_fit, bake(aatd_num_rec, testing(aatd_split))),
+  predict(aatd_psvm_fit, bake(aatd_num_rec, testing(aatd_split)), type = "prob")
+) %>%
+  bind_cols(select(testing(aatd_split), genotype)) %>%
+  print() ->
+  aatd_psvm_res
+aatd_psvm_res %>%
+  count(.pred_class, genotype)
+aatd_psvm_res %>%
+  metrics(truth = genotype, estimate = .pred_class, .pred_Abnormal)
+
+# compare ROC curves
+list(
+  logistic_regression = aatd_lr_res,
+  random_forest = aatd_rf_res,
+  linear_svm = aatd_lsvm_res,
+  polynomial_svm = aatd_psvm_res
+) %>%
+  enframe(name = "model", value = "results") %>%
+  mutate(model = fct_inorder(model)) %>%
+  unnest(results) %>%
+  group_by(model) %>%
+  roc_curve(truth = genotype, estimate = .pred_Abnormal) %>%
+  autoplot() ->
+  aatd_roc
+ggsave(here::here("fig/aatd-roc.png"), aatd_roc)
+
+# compare PR curves
+list(
+  logistic_regression = aatd_lr_res,
+  random_forest = aatd_rf_res,
+  linear_svm = aatd_lsvm_res,
+  polynomial_svm = aatd_psvm_res
+) %>%
+  enframe(name = "model", value = "results") %>%
+  mutate(model = fct_inorder(model)) %>%
+  unnest(results) %>%
+  group_by(model) %>%
+  pr_curve(truth = genotype, estimate = .pred_Abnormal) %>%
+  autoplot()
 
 stop()
 
-# hyperparameters
-p_data <- 1/100
-n_folds <- 6L
-#n_folds <- 12L
+#' 2. Single-partition, CV-optimized
+
+
+
+#' 3. CV-evaluated, CV-optimized
 
 # partition for machine learning
 aatd_cv_outer <- vfold_cv(aatd_data, v = n_folds, strata = genotype)

@@ -89,7 +89,6 @@ aatd_data %>%
   semi_join(aatd_pred, by = "record_id") ->
   aatd_resp
 
+# save 
 write_rds(aatd_pred, here::here("data/aatd-pred.rds"))
 write_rds(aatd_resp, here::here("data/aatd-resp.rds"))
-
-# save 
