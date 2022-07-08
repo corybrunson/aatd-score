@@ -59,6 +59,7 @@ aatd_data %>%
     ! is.na(date_of_birth) ~ interval(date_of_birth, "2020-06-01") / years(1),
     TRUE ~ NA_real_
   )) %>%
+  # note: not enough `date_received` values for temporal validation
   select(-date_of_birth, -date_received, -age_calculated) %>%
   # drop response variables
   select(-starts_with("genotype"), -starts_with("aat_")) %>%
@@ -86,7 +87,8 @@ aatd_data %>%
 # join response variables back in (regardless of missingness)
 aatd_data %>%
   select(record_id, starts_with("genotype"), starts_with("aat_")) %>%
-  semi_join(aatd_pred, by = "record_id") ->
+  semi_join(aatd_pred, by = "record_id") %>%
+  print() ->
   aatd_resp
 
 # save 
