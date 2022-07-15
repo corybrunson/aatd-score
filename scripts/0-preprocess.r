@@ -47,7 +47,10 @@ here::here("data-raw/AAT Detection Database_deidenti.xlsx") %>%
 aatd_data %>%
   mutate(across(everything(), is.na)) %>%
   summarize(across(everything(), ~ sum(.) / n())) %>%
-  glimpse()
+  t() %>% as.data.frame() %>%
+  set_names("Missingness") %>%
+  rownames_to_column("Variable") %>%
+  knitr::kable()
 
 # transform variables in preparation for predictive modeling
 aatd_data %>%
