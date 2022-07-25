@@ -94,6 +94,17 @@ aatd_data %>%
   print() ->
   aatd_resp
 
-# save 
+# save patient-level data
 write_rds(aatd_pred, here::here("data/aatd-pred.rds"))
 write_rds(aatd_resp, here::here("data/aatd-resp.rds"))
+
+# genotypes to include in analysis
+read_rds(here::here("data/aatd-resp.rds")) %>%
+  count(genotype) %>%
+  filter(n > 120L) %>%
+  select(genotype) %>%
+  drop_na() ->
+  genotype_incl
+
+# save genotypes to include
+write_rds(genotype_incl, here::here("data/genotype-incl.rds"))

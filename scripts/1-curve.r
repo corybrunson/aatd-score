@@ -10,12 +10,7 @@ p_data <- 1/6
 n_train <- 2/3
 
 # genotypes to include in analysis
-read_rds(here::here("data/aatd-resp.rds")) %>%
-  count(genotype) %>%
-  filter(n > 120L) %>%
-  select(genotype) %>%
-  drop_na() ->
-  genotype_incl
+genotype_incl <- read_rds(here::here("data/genotype-incl.rds"))
 
 # model specifications as tidy selections
 vars_predictors <- list(
@@ -102,9 +97,10 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
   select(record_id, genotype) %>%
   semi_join(genotype_incl, by = "genotype") %>%
   # choice of response
-  mutate(geno_class = ifelse(
-    eval(vars_response[[i_resp]]),
-    "Abnormal", "Normal"
+  mutate(
+    geno_class = ifelse(
+      eval(vars_response[[i_resp]]),
+      "Abnormal", "Normal"
     ),
     # make abnormal genotype the first factor level (outcome)
     geno_class = factor(geno_class, c("Abnormal", "Normal"))
