@@ -17,7 +17,8 @@ genotype_incl <- read_rds(here::here("data/genotype-incl.rds"))
 vars_predictors <- list(
   Dx = expr(c(starts_with("lung_"), starts_with("liver_"))),
   `Dx+age` =
-    expr(c(contains("age_guess"), starts_with("lung_"), starts_with("liver_"))),
+    expr(c(contains("age_guess"), contains("receipt_date"),
+           starts_with("lung_"), starts_with("liver_"))),
   `Dx+gender` =
     expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_"))),
   `Dx+tobacco` =
@@ -56,11 +57,11 @@ svm_linear() %>%
   set_mode("classification") ->
   aatd_svm1_spec
 
-# # quadratic SVM
-# svm_poly(degree = 2L) %>%
-#   set_engine("kernlab") %>%
-#   set_mode("classification") ->
-#   aatd_svm2_spec
+# quadratic SVM
+svm_poly(degree = 2L) %>%
+  set_engine("kernlab") %>%
+  set_mode("classification") ->
+  aatd_svm2_spec
 
 # cubic SVM
 svm_poly(degree = 3L) %>%
@@ -68,20 +69,22 @@ svm_poly(degree = 3L) %>%
   set_mode("classification") ->
   aatd_svm3_spec
 
-# initialize results
-aatd_metrics <- tibble()
-
 # progress bar
 n_loop <- length(vars_predictors) * length(vars_response)
 pb <- progress::progress_bar$new(total = n_loop)
 
-ii <- if (file.exists(here::here("data/aatd-curve-ii.rds"))) {
-  read_rds(here::here("data/aatd-curve-ii.rds"))
+ii <- if (file.exists(here::here("data/aatd-cv-ii.rds"))) {
+  read_rds(here::here("data/aatd-cv-ii.rds"))
 } else {
   c(0L, 0L)
 }
+aatd_metrics <- if (file.exists(here::here("data/aatd-eval.rds"))) {
+  read_rds(here::here("data/aatd-eval.rds"))
+} else {
+  tibble()
+}
 
-for (i_pred in seq_along(vars_predictors))
+for (i_pred in seq_along(vars_predictors)) {#LOOP
 for (i_resp in seq_along(vars_response)) {#LOOP
 
 pb$tick()
@@ -89,6 +92,11 @@ if (i_pred < ii[[1L]] || (i_pred == ii[[1L]] && i_resp < ii[[2L]])) next
 
 pred <- names(vars_predictors)[[i_pred]]
 resp <- names(vars_response)[[i_resp]]
+
+print("--------------------------------")
+print(str_c("Predictors: ", pred))
+print(str_c("Response: ", resp))
+print("--------------------------------")
 
 #' 1.1. Pre-process data
 
@@ -237,41 +245,42 @@ aatd_metrics %>%
 #   add_model(aatd_svm2_spec) %>%
 #   fit_resamples(resamples = aatd_cv) ->
 #   aatd_svm2_fit
-
+# 
 # # average evaluation
 # aatd_svm2_fit %>%
 #   collect_metrics() %>%
 #   mutate(predictors = pred, response = resp, model = "quadratic svm") %>%
 #   relocate(predictors, response, model) ->
 #   aatd_svm2_metrics
-
+# 
 # # augment results
 # aatd_metrics %>%
 #   bind_rows(aatd_svm2_metrics) ->
 #   aatd_metrics
 
-# fit model
-workflow() %>%
-  #add_formula(geno_class ~ .) %>%
-  add_recipe(aatd_num_rec) %>%
-  add_model(aatd_svm3_spec) %>%
-  fit_resamples(resamples = aatd_cv) ->
-  aatd_svm3_fit
-
-# average evaluation
-aatd_svm3_fit %>%
-  collect_metrics() %>%
-  mutate(predictors = pred, response = resp, model = "cubic svm") %>%
-  relocate(predictors, response, model) ->
-  aatd_svm3_metrics
-
-# augment results
-aatd_metrics %>%
-  bind_rows(aatd_svm3_metrics) ->
-  aatd_metrics
+# # fit model
+# workflow() %>%
+#   #add_formula(geno_class ~ .) %>%
+#   add_recipe(aatd_num_rec) %>%
+#   add_model(aatd_svm3_spec) %>%
+#   fit_resamples(resamples = aatd_cv) ->
+#   aatd_svm3_fit
+# 
+# # average evaluation
+# aatd_svm3_fit %>%
+#   collect_metrics() %>%
+#   mutate(predictors = pred, response = resp, model = "cubic svm") %>%
+#   relocate(predictors, response, model) ->
+#   aatd_svm3_metrics
+# 
+# # augment results
+# aatd_metrics %>%
+#   bind_rows(aatd_svm3_metrics) ->
+#   aatd_metrics
 
 write_rds(aatd_metrics, here::here("data/aatd-eval.rds"))
-write_rds(c(i_pred, i_resp), here::here("data/aatd-curve-ii.rds"))
+write_rds(c(i_pred, i_resp), here::here("data/aatd-cv-ii.rds"))
 
+}#LOOP
 }#LOOP
 

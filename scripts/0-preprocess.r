@@ -1,5 +1,6 @@
 library(tidyverse)
 library(lubridate)
+library(magrittr)
 
 here::here("data-raw/AAT Detection Database_deidenti.xlsx") %>%
   readxl::read_xlsx() %>%
@@ -10,7 +11,7 @@ here::here("data-raw/AAT Detection Database_deidenti.xlsx") %>%
   #   -patient_received_what_is_alpha_1_brochure, -physician_address_zipcode
   # ) %>%
   # format dates as dates
-  mutate(across(contains("date"), as_date, format = "%m/%d/%y")) %>%
+  mutate(across(contains("date"), as_date, format = "%m/%d/%Y")) %>%
   # coerce checkbox and yes/no responses to logical
   mutate(across(
     where(~ all(. %in% c("Unchecked", "Checked"))),
@@ -52,18 +53,87 @@ aatd_data %>%
   rownames_to_column("Variable") %>%
   knitr::kable()
 
-# transform variables in preparation for predictive modeling
+# age distribution
+ggplot(aatd_data, aes(x = age_calculated)) + geom_histogram()
+# distribution of dates received
 aatd_data %>%
-  # guess ages
+  filter(! is.na(date_received)) %>%
+  summarize(across(
+    date_received,
+    list(min = min, max = max, mean = mean, median = median)
+  ))
+aatd_data %>%
+  ggplot(aes(x = date_received)) +
+  geom_histogram()
+# date received earlier than date of birth
+aatd_data %>%
+  mutate(row = row_number()) %>%
+  filter(is.na(age_calculated)) %>%
+  filter(! is.na(date_of_birth) & ! is.na(date_received)) %>%
+  mutate(age_guess = interval(date_of_birth, date_received) / years(1)) %>%
+  select(row, date_of_birth, date_received, age_guess) %>%
+  print() %T>% { hist(.$age_guess) } %>%
+  mutate(contiguous_group = cumsum(is.na(lag(row)) | row != lag(row) + 1L)) %>%
+  select(row, contiguous_group) %>%
+  group_by(contiguous_group) %>%
+  nest(rows = row) %>%
+  pull(rows) %>%
+  map(~ unname(unlist(.)))
+# guess missing ages
+aatd_data %>%
+  mutate(age_avail = case_when(
+    ! is.na(age_calculated) ~ "already calculated",
+    ! is.na(date_of_birth) & ! is.na(date_received) ~ "birth & reception date",
+    ! is.na(date_of_birth) ~ "birth date only",
+    TRUE ~ "nothing"
+  )) %>%
+  #count(age_avail)
   mutate(age_guess = case_when(
     ! is.na(age_calculated) ~ age_calculated,
     ! is.na(date_of_birth) & ! is.na(date_received) ~
       interval(date_of_birth, date_received) / years(1),
-    ! is.na(date_of_birth) ~ interval(date_of_birth, "2020-06-01") / years(1),
+    ! is.na(date_of_birth) ~ interval(date_of_birth, "2009-01-01") / years(1),
+    TRUE ~ NA_real_
+  )) %>%
+  select(age_avail, age_guess) %>%
+  ggplot(aes(x = age_guess)) +
+  facet_wrap(~ age_avail, scales = "free") +
+  geom_histogram()
+# plot date of receipt against row
+aatd_data %>%
+  transmute(row = row_number(), date_received) %>%
+  ggplot(aes(x = row, y = date_received)) +
+  geom_point()
+aatd_data %>%
+  transmute(row = row_number(), date_received) %>%
+  mutate(batch = cut(row, c(0, 5e4, 2e5, Inf))) %>%
+  ggplot(aes(x = batch, y = date_received)) +
+  geom_boxplot()
+
+# transform variables in preparation for predictive modeling
+aatd_data %>%
+  # impute reception dates
+  mutate(receipt_date = ! is.na(date_received)) %>%
+  mutate(date_received_impute = if_else(
+    is.na(date_received),
+    date_received[sample(
+      which(! is.na(date_received)),
+      nrow(aatd_data), replace = TRUE
+    )],
+    date_received
+  )) %>%
+  # guess ages
+  mutate(age_guess = case_when(
+    ! is.na(age_calculated) ~ age_calculated,
+    ! is.na(date_of_birth) & ! is.na(date_received) ~ NA_real_,
+    ! is.na(date_of_birth) ~
+      interval(date_of_birth, date_received_impute) / years(1),
     TRUE ~ NA_real_
   )) %>%
   # note: not enough `date_received` values for temporal validation
-  select(-date_of_birth, -date_received, -age_calculated) %>%
+  select(
+    -date_of_birth, -date_received, -date_received_impute, -age_calculated
+  ) %>%
   # drop response variables
   select(-starts_with("genotype"), -starts_with("aat_")) %>%
   # multiple packs per day by years
@@ -86,6 +156,13 @@ aatd_data %>%
   drop_na() %>%
   print() ->
   aatd_pred
+
+# age guess distribution
+ggplot(aatd_pred, aes(x = age_guess)) + geom_histogram()
+aatd_pred %>%
+  ggplot(aes(x = age_guess)) +
+  facet_grid(receipt_date ~ ., scales = "free_y") +
+  geom_histogram()
 
 # join response variables back in (regardless of missingness)
 aatd_data %>%

@@ -11,17 +11,19 @@ library(tidymodels)
 
 #' Setup
 
+set.seed(78280L)
+
 # hyperparameters
 p_data <- 1/10
 p_data <- 1/6
-#p_data <- 1
+p_data <- 1
 n_train <- 2/3
 
 # genotypes to include in analysis
 genotype_incl <- read_rds(here::here("data/genotype-incl.rds"))
 
 # illustrative prediction
-i <- 1L
+n_ill <- 3L
 
 #' Pre-process data
 
@@ -97,8 +99,19 @@ workflow() %>%
   fit(training(aatd_split)) ->
   aatd_dx_fit
 
+# sample for illustration, balanced by normality, abnormal allelle, and tobacco
+testing(aatd_split) %>%
+  nest(cohort = -c(geno_class, geno_abtype, any_tobacco_exposure)) %>%
+  mutate(cohort = map(cohort, ~ sample_n(., size = n_ill))) %>%
+  arrange(geno_class, geno_abtype, any_tobacco_exposure) %>%
+  unnest(cohort) ->
+  test_aatd_sample
+
 # predict abnormal genotype
-predict(aatd_dx_fit, slice(testing(aatd_split), i), type = "prob")
+aatd_dx_fit %>%
+  predict(test_aatd_sample, type = "prob") %>%
+  print() ->
+  aatd_dx_abnormal_pred
 
 # subset to abnormal genotypes
 testing(aatd_split) %>%
@@ -111,7 +124,9 @@ test_aatd_abnormal %>%
   summarize(
     .pred_ZZ = sum(n * (geno_abtype == "ZZ")) / sum(n),
     .pred_SZ = sum(n * (geno_abtype == "SZ")) / sum(n)
-  )
+  ) %>%
+  print() ->
+  aatd_dx_zz_pred
 
 #' 2. + conditional Dx-only model
 
@@ -135,7 +150,10 @@ workflow() %>%
   aatd_cond_fit
 
 # predict abnormal genotype
-predict(aatd_cond_fit, slice(testing(aatd_split), i), type = "prob")
+aatd_cond_fit %>%
+  predict(test_aatd_sample, type = "prob") %>%
+  print() ->
+  aatd_cond_zz_pred
 
 #' 3. + conditional Dx/age/smoking model
 
@@ -159,4 +177,23 @@ workflow() %>%
   aatd_aug_fit
 
 # predict abnormal genotype
-predict(aatd_aug_fit, slice(testing(aatd_split), i), type = "prob")
+aatd_aug_fit %>%
+  predict(test_aatd_sample, type = "prob") %>%
+  print() ->
+  aatd_aug_zz_pred
+
+#' Analysis
+
+# bind predictions for analysis
+test_aatd_sample %>%
+  bind_cols(aatd_dx_abnormal_pred) %>%
+  bind_cols(rename_with(aatd_dx_zz_pred, ~ str_replace(., "_", "_dx_"))) %>%
+  bind_cols(rename_with(aatd_cond_zz_pred, ~ str_replace(., "_", "_cond_"))) %>%
+  bind_cols(rename_with(aatd_aug_zz_pred, ~ str_replace(., "_", "_aug_"))) %>%
+  print() ->
+  aatd_pred
+
+# write to CSV
+aatd_pred %>%
+  mutate(across(starts_with(".pred_"), round, digits = 8L)) %>%
+  write_csv(here::here("data/aatd-conditional-predictions.csv"))

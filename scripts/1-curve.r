@@ -5,7 +5,7 @@ library(tidymodels)
 
 # hyperparameters
 p_data <- 1/10
-p_data <- 1/6
+#p_data <- 1/6
 #p_data <- 1
 n_train <- 2/3
 
@@ -16,7 +16,8 @@ genotype_incl <- read_rds(here::here("data/genotype-incl.rds"))
 vars_predictors <- list(
   Dx = expr(c(starts_with("lung_"), starts_with("liver_"))),
   `Dx+age` =
-    expr(c(contains("age_guess"), starts_with("lung_"), starts_with("liver_"))),
+    expr(c(contains("age_guess"), contains("receipt_date"),
+           starts_with("lung_"), starts_with("liver_"))),
   `Dx+gender` =
     expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_"))),
   `Dx+tobacco` =
@@ -57,11 +58,11 @@ svm_linear() %>%
   set_mode("classification") ->
   aatd_svm1_spec
 
-# # quadratic SVM model specification
-# svm_poly(degree = 2L) %>%
-#   set_engine("kernlab") %>%
-#   set_mode("classification") ->
-#   aatd_svm2_spec
+# quadratic SVM model specification
+svm_poly(degree = 2L) %>%
+  set_engine("kernlab") %>%
+  set_mode("classification") ->
+  aatd_svm2_spec
 
 # cubic SVM model specification
 svm_poly(degree = 3L) %>%
@@ -75,13 +76,18 @@ ii <- if (file.exists(here::here("data/aatd-curve-ii.rds"))) {
   c(0L, 0L)
 }
 
-for (i_pred in seq_along(vars_predictors))
+for (i_pred in seq_along(vars_predictors)) {#LOOP
 for (i_resp in seq_along(vars_response)) {#LOOP
 
-if (i_pred < ii[[1L]] || (i_pred == ii[[1L]] && i_resp < ii[[2L]])) next
+if (i_pred < ii[[1L]] || (i_pred == ii[[1L]] && i_resp <= ii[[2L]])) next
 
 pred <- names(vars_predictors)[[i_pred]]
 resp <- names(vars_response)[[i_resp]]
+
+print("--------------------------------")
+print(str_c("Predictors: ", pred))
+print(str_c("Response: ", resp))
+print("--------------------------------")
 
 #' 1.1. Pre-process data
 
@@ -207,29 +213,29 @@ aatd_svm1_res %>%
 aatd_svm1_res %>%
   metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal)
 
-# # fit model
-# aatd_svm2_spec %>%
-#   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
-#   aatd_svm2_fit
-
-# # evaluate model
-# aatd_svm2_res <- fit_results(aatd_svm2_fit, aatd_num_rec)
-# aatd_svm2_res %>%
-#   count(.pred_class, geno_class)
-# aatd_svm2_res %>%
-#   metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal)
-
 # fit model
-aatd_svm3_spec %>%
+aatd_svm2_spec %>%
   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
-  aatd_svm3_fit
+  aatd_svm2_fit
 
 # evaluate model
-aatd_svm3_res <- fit_results(aatd_svm3_fit, aatd_num_rec)
-aatd_svm3_res %>%
+aatd_svm2_res <- fit_results(aatd_svm2_fit, aatd_num_rec)
+aatd_svm2_res %>%
   count(.pred_class, geno_class)
-aatd_svm3_res %>%
+aatd_svm2_res %>%
   metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal)
+
+# # fit model
+# aatd_svm3_spec %>%
+#   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
+#   aatd_svm3_fit
+# 
+# # evaluate model
+# aatd_svm3_res <- fit_results(aatd_svm3_fit, aatd_num_rec)
+# aatd_svm3_res %>%
+#   count(.pred_class, geno_class)
+# aatd_svm3_res %>%
+#   metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal)
 
 #' 1.7. Comparison of models
 
@@ -238,8 +244,8 @@ list(
   `logistic regression` = aatd_lr_res
   , `random forest` = aatd_rf_res
   , `linear svm` = aatd_svm1_res
-  # , `quadratic svm` = aatd_svm2_res
-  , `cubic svm` = aatd_svm3_res
+  , `quadratic svm` = aatd_svm2_res
+  # , `cubic svm` = aatd_svm3_res
 ) %>%
   enframe(name = "model", value = "results") %>%
   mutate(model = fct_inorder(model)) %>%
@@ -262,8 +268,8 @@ list(
   `logistic regression` = aatd_lr_res
   , `random forest` = aatd_rf_res
   , `linear svm` = aatd_svm1_res
-  # , `quadratic svm` = aatd_svm2_res
-  , `cubic svm` = aatd_svm3_res
+  , `quadratic svm` = aatd_svm2_res
+  # , `cubic svm` = aatd_svm3_res
 ) %>%
   enframe(name = "model", value = "results") %>%
   mutate(model = fct_inorder(model)) %>%
@@ -273,6 +279,7 @@ list(
   autoplot() +
   geom_point(data = copd_res, aes(x = recall, y = precision)) +
   scale_x_continuous(trans = "log") + scale_y_continuous(trans = "log") +
+  lims(x = c(0, 1), y = c(0, 1)) + coord_equal() +
   ggtitle(str_c(pred, "-based screen for ", resp)) ->
   aatd_pr
 ggsave(
@@ -282,4 +289,5 @@ ggsave(
 
 write_rds(c(i_pred, i_resp), here::here("data/aatd-curve-ii.rds"))
 
+}#LOOP
 }#LOOP
