@@ -1,12 +1,21 @@
-library(tidyverse)
-library(tidymodels)
+#' This script uses several families of models to predict abnormal genotype from
+#' liver and lung disease histories and other personal factors. Each combination
+#' of predictors, response, and model is conducted, and for each combination of
+#' predictors and response the models are compared using performance curves.
+#' Fixed parameter values are used for all models. On each plot of curves is
+#' superimposed the performance of COPD as a screening indication. Evaluations
+#' are performed using a designated subset of the data, partitioned into
+#' training and testing sets in a designated proportion.
 
 #' Setup
 
+library(tidyverse)
+library(tidymodels)
+
 # hyperparameters
-p_data <- 1/10
-#p_data <- 1/6
-#p_data <- 1
+# p_data <- 1/10
+# p_data <- 1/6
+p_data <- 1
 n_train <- 2/3
 
 # genotypes to include in analysis
@@ -22,7 +31,7 @@ vars_predictors <- list(
     expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_"))),
   `Dx+tobacco` =
     expr(c(contains("smoking_history_cigarette"),
-           contains("any_tobacco_exposure"),
+           # contains("any_tobacco_exposure"),
            starts_with("lung_"), starts_with("liver_")))
 )
 
@@ -35,9 +44,7 @@ vars_response <- list(
   Ab = expr(genotype != "MM")
 )
 
-#' 1. Single-partition, fixed-parameter
-
-#' 1.0 Model specifications
+#' Model specifications
 
 # logistic regression, fix parameters
 logistic_reg(penalty = 1) %>%
@@ -70,8 +77,15 @@ svm_poly(degree = 3L) %>%
   set_mode("classification") ->
   aatd_svm3_spec
 
-ii <- if (file.exists(here::here("data/aatd-curve-ii.rds"))) {
-  read_rds(here::here("data/aatd-curve-ii.rds"))
+#' Result tables
+
+aatd_copd_res <- tibble()
+aatd_mod_res_count <- tibble()
+aatd_mod_res_metric <- tibble()
+aatd_mod_res_pred <- tibble()
+
+ii <- if (file.exists(here::here("data/aatd-1-split-ii.rds"))) {
+  read_rds(here::here("data/aatd-1-split-ii.rds"))
 } else {
   c(0L, 0L)
 }
@@ -89,7 +103,7 @@ print(str_c("Predictors: ", pred))
 print(str_c("Response: ", resp))
 print("--------------------------------")
 
-#' 1.1. Pre-process data
+#' Pre-process data
 
 # load and subset predictors data
 read_rds(here::here("data/aatd-pred.rds")) %>%
@@ -116,7 +130,7 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
   inner_join(aatd_data, by = "record_id") ->
   aatd_data
 
-#' 1.2 COPD indication
+#' COPD indication
 
 aatd_data %>%
   transmute(screen = lung_hx_copd, test = geno_class == "Abnormal") %>%
@@ -133,10 +147,14 @@ aatd_data %>%
     specificity = TN / (TN + FP),
     precision = TP / (TP + FP),
     recall = sensitivity
-  ) ->
-  copd_res
+  ) %>%
+  mutate(predictors = pred, response = resp) ->
+  aatd_copd_res_i
+aatd_copd_res <- bind_rows(aatd_copd_res, aatd_copd_res_i)
+# write to data file
+write_rds(aatd_copd_res, here::here("data/aatd-1-copd.rds"))
 
-#' 1.3 Prepare recipes
+#' Prepare recipes
 
 # initial partition
 aatd_split <- initial_split(aatd_data, prop = n_train, strata = geno_class)
@@ -171,7 +189,7 @@ fit_results <- function(fit, rec) {
   )
 }
 
-#' 1.4. Logistic regression
+#' Logistic regression
 
 # fit model
 aatd_lr_spec %>%
@@ -180,12 +198,8 @@ aatd_lr_spec %>%
 
 # evaluate model
 aatd_lr_res <- fit_results(aatd_lr_fit, aatd_reg_rec)
-aatd_lr_res %>%
-  count(.pred_class, geno_class)
-aatd_lr_res %>%
-  metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal)
 
-#' 1.5. Random forest classification
+#' Random forest classification
 
 # fit model
 aatd_rf_spec %>%
@@ -194,12 +208,8 @@ aatd_rf_spec %>%
 
 # evaluate model
 aatd_rf_res <- fit_results(aatd_rf_fit, aatd_num_rec)
-aatd_rf_res %>%
-  count(.pred_class, geno_class)
-aatd_rf_res %>%
-  metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal)
 
-#' 1.6. Support vector machine classification
+#' Support vector machine classification
 
 # fit model
 aatd_svm1_spec %>%
@@ -208,10 +218,6 @@ aatd_svm1_spec %>%
 
 # evaluate model
 aatd_svm1_res <- fit_results(aatd_svm1_fit, aatd_num_rec)
-aatd_svm1_res %>%
-  count(.pred_class, geno_class)
-aatd_svm1_res %>%
-  metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal)
 
 # fit model
 aatd_svm2_spec %>%
@@ -220,74 +226,71 @@ aatd_svm2_spec %>%
 
 # evaluate model
 aatd_svm2_res <- fit_results(aatd_svm2_fit, aatd_num_rec)
-aatd_svm2_res %>%
-  count(.pred_class, geno_class)
-aatd_svm2_res %>%
-  metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal)
 
-# # fit model
-# aatd_svm3_spec %>%
-#   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
-#   aatd_svm3_fit
-# 
-# # evaluate model
-# aatd_svm3_res <- fit_results(aatd_svm3_fit, aatd_num_rec)
-# aatd_svm3_res %>%
-#   count(.pred_class, geno_class)
-# aatd_svm3_res %>%
-#   metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal)
+# fit model
+aatd_svm3_spec %>%
+  fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
+  aatd_svm3_fit
 
-#' 1.7. Comparison of models
+# evaluate model
+aatd_svm3_res <- fit_results(aatd_svm3_fit, aatd_num_rec)
 
-# compare ROC curves
+#' Comparison of models
+
+# count tables
 list(
   `logistic regression` = aatd_lr_res
   , `random forest` = aatd_rf_res
   , `linear svm` = aatd_svm1_res
   , `quadratic svm` = aatd_svm2_res
-  # , `cubic svm` = aatd_svm3_res
+  , `cubic svm` = aatd_svm3_res
 ) %>%
-  enframe(name = "model", value = "results") %>%
-  mutate(model = fct_inorder(model)) %>%
-  unnest(results) %>%
-  group_by(model) %>%
-  roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
-  autoplot() +
-  # account for silliness of autoplot
-  geom_point(data = mutate(copd_res, specificity = 1 - specificity),
-             aes(x = specificity, y = sensitivity)) +
-  ggtitle(str_c(pred, "-based screen for ", resp)) ->
-  aatd_roc
-ggsave(
-  here::here(str_c("fig/aatd-", tolower(pred), "-", tolower(resp), "-roc.png")),
-  aatd_roc
-)
+  map(count, .pred_class, geno_class, name = "count") %>%
+  enframe(name = "model", value = "count") %>%
+  mutate(model = fct_inorder(model), predictors = pred, response = resp) %>%
+  unnest(count) %>%
+  select(response, predictors, model, everything(), count) ->
+  aatd_mod_res_count_i
+aatd_mod_res_count <- bind_rows(aatd_mod_res_count, aatd_mod_res_count_i)
+# write to data file
+write_rds(aatd_mod_res_count, here::here("data/aatd-1-count.rds"))
 
-# compare PR curves
+# metric tables
 list(
   `logistic regression` = aatd_lr_res
   , `random forest` = aatd_rf_res
   , `linear svm` = aatd_svm1_res
   , `quadratic svm` = aatd_svm2_res
-  # , `cubic svm` = aatd_svm3_res
+  , `cubic svm` = aatd_svm3_res
+) %>%
+  map(metrics, truth = geno_class, estimate = .pred_class, .pred_Abnormal) %>%
+  enframe(name = "model", value = "metrics") %>%
+  mutate(model = fct_inorder(model), predictors = pred, response = resp) %>%
+  unnest(metrics) %>%
+  select(response, predictors, model, everything()) ->
+  aatd_mod_res_metric_i
+aatd_mod_res_metric <- bind_rows(aatd_mod_res_metric, aatd_mod_res_metric_i)
+# write to data file
+write_rds(aatd_mod_res_metric, here::here("data/aatd-1-metric.rds"))
+
+# prediction tables
+list(
+  `logistic regression` = aatd_lr_res
+  , `random forest` = aatd_rf_res
+  , `linear svm` = aatd_svm1_res
+  , `quadratic svm` = aatd_svm2_res
+  , `cubic svm` = aatd_svm3_res
 ) %>%
   enframe(name = "model", value = "results") %>%
-  mutate(model = fct_inorder(model)) %>%
-  unnest(results) %>%
-  group_by(model) %>%
-  pr_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
-  autoplot() +
-  geom_point(data = copd_res, aes(x = recall, y = precision)) +
-  scale_x_continuous(trans = "log") + scale_y_continuous(trans = "log") +
-  lims(x = c(0, 1), y = c(0, 1)) + coord_equal() +
-  ggtitle(str_c(pred, "-based screen for ", resp)) ->
-  aatd_pr
-ggsave(
-  here::here(str_c("fig/aatd-", tolower(pred), "-", tolower(resp), "-pr.png")),
-  aatd_pr
-)
+  mutate(model = fct_inorder(model), predictors = pred, response = resp) %>%
+  unnest(results) ->
+  aatd_mod_res_pred_i
+aatd_mod_res_pred <- bind_rows(aatd_mod_res_pred, aatd_mod_res_pred_i)
+# write to data file
+write_rds(aatd_mod_res_pred, here::here("data/aatd-1-pred.rds"))
 
-write_rds(c(i_pred, i_resp), here::here("data/aatd-curve-ii.rds"))
+# keep track of step
+write_rds(c(i_pred, i_resp), here::here("data/aatd-1-split-ii.rds"))
 
 }#LOOP
 }#LOOP
