@@ -6,10 +6,14 @@
 #' superimposed the performance of COPD as a screening indication. Evaluations
 #' are performed using a designated subset of the data, partitioned into
 #' training and testing sets in a designated proportion.
+#' 
+#' See here for model families available through {parsnip}:
+#' https://www.tidymodels.org/find/parsnip/
 
 #' Setup
 
 library(tidyverse)
+library(discrim)
 library(tidymodels)
 
 # hyperparameters
@@ -52,11 +56,23 @@ logistic_reg(penalty = 1) %>%
   set_mode("classification") ->
   aatd_lr_spec
 
+# linear discriminant analysis, fix parameters
+discrim_linear(penalty = 1) %>%
+  set_engine("MASS") %>%
+  set_mode("classification") ->
+  aatd_lda_spec
+
 # random forest, fix parameters
 rand_forest(mtry = NULL, trees = 120L) %>%
   set_engine("randomForest") %>%
   set_mode("classification") ->
   aatd_rf_spec
+
+# nearest neighbor, fix parameters
+nearest_neighbor(neighbors = 360L, weight_func = "triangular") %>%
+  set_engine("kknn") %>%
+  set_mode("classification") ->
+  aatd_nn_spec
 
 # linear SVM, fix parameters
 svm_linear() %>%
@@ -79,10 +95,26 @@ svm_poly(degree = 3L) %>%
 
 #' Result tables
 
-aatd_copd_res <- tibble()
-aatd_mod_res_count <- tibble()
-aatd_mod_res_metric <- tibble()
-aatd_mod_res_pred <- tibble()
+aatd_copd_res <- if (file.exists(here::here("data/aatd-1-copd.rds"))) {
+  read_rds(here::here("data/aatd-1-copd.rds"))
+} else {
+  tibble()
+}
+aatd_mod_res_count <- if (file.exists(here::here("data/aatd-1-count.rds"))) {
+  read_rds(here::here("data/aatd-1-count.rds"))
+} else {
+  tibble()
+}
+aatd_mod_res_metric <- if (file.exists(here::here("data/aatd-1-metric.rds"))) {
+  read_rds(here::here("data/aatd-1-metric.rds"))
+} else {
+  tibble()
+}
+aatd_mod_res_pred <- if (file.exists(here::here("data/aatd-1-pred.rds"))) {
+  read_rds(here::here("data/aatd-1-pred.rds"))
+} else {
+  tibble()
+}
 
 ii <- if (file.exists(here::here("data/aatd-1-split-ii.rds"))) {
   read_rds(here::here("data/aatd-1-split-ii.rds"))
@@ -199,6 +231,16 @@ aatd_lr_spec %>%
 # evaluate model
 aatd_lr_res <- fit_results(aatd_lr_fit, aatd_reg_rec)
 
+#' Linear discriminant analysis
+
+# fit model
+aatd_lda_spec %>%
+  fit(geno_class ~ ., bake(aatd_reg_rec, NULL)) ->
+  aatd_lda_fit
+
+# evaluate model
+aatd_lda_res <- fit_results(aatd_lda_fit, aatd_reg_rec)
+
 #' Random forest classification
 
 # fit model
@@ -209,41 +251,53 @@ aatd_rf_spec %>%
 # evaluate model
 aatd_rf_res <- fit_results(aatd_rf_fit, aatd_num_rec)
 
+#' Nearest neighbors classification
+
+# fit model
+aatd_nn_spec %>%
+  fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
+  aatd_nn_fit
+
+# evaluate model
+aatd_nn_res <- fit_results(aatd_nn_fit, aatd_num_rec)
+
 #' Support vector machine classification
 
-# fit model
-aatd_svm1_spec %>%
-  fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
-  aatd_svm1_fit
+# # fit model
+# aatd_svm1_spec %>%
+#   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
+#   aatd_svm1_fit
+# 
+# # evaluate model
+# aatd_svm1_res <- fit_results(aatd_svm1_fit, aatd_num_rec)
 
-# evaluate model
-aatd_svm1_res <- fit_results(aatd_svm1_fit, aatd_num_rec)
+# # fit model
+# aatd_svm2_spec %>%
+#   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
+#   aatd_svm2_fit
+# 
+# # evaluate model
+# aatd_svm2_res <- fit_results(aatd_svm2_fit, aatd_num_rec)
 
-# fit model
-aatd_svm2_spec %>%
-  fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
-  aatd_svm2_fit
-
-# evaluate model
-aatd_svm2_res <- fit_results(aatd_svm2_fit, aatd_num_rec)
-
-# fit model
-aatd_svm3_spec %>%
-  fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
-  aatd_svm3_fit
-
-# evaluate model
-aatd_svm3_res <- fit_results(aatd_svm3_fit, aatd_num_rec)
+# # fit model
+# aatd_svm3_spec %>%
+#   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
+#   aatd_svm3_fit
+# 
+# # evaluate model
+# aatd_svm3_res <- fit_results(aatd_svm3_fit, aatd_num_rec)
 
 #' Comparison of models
 
 # count tables
 list(
   `logistic regression` = aatd_lr_res
+  , `linear discriminant` = aatd_lda_res
   , `random forest` = aatd_rf_res
-  , `linear svm` = aatd_svm1_res
-  , `quadratic svm` = aatd_svm2_res
-  , `cubic svm` = aatd_svm3_res
+  , `nearest neighbor` = aatd_nn_res
+  # , `linear svm` = aatd_svm1_res
+  # , `quadratic svm` = aatd_svm2_res
+  # , `cubic svm` = aatd_svm3_res
 ) %>%
   map(count, .pred_class, geno_class, name = "count") %>%
   enframe(name = "model", value = "count") %>%
@@ -258,10 +312,12 @@ write_rds(aatd_mod_res_count, here::here("data/aatd-1-count.rds"))
 # metric tables
 list(
   `logistic regression` = aatd_lr_res
+  , `linear discriminant` = aatd_lda_res
   , `random forest` = aatd_rf_res
-  , `linear svm` = aatd_svm1_res
-  , `quadratic svm` = aatd_svm2_res
-  , `cubic svm` = aatd_svm3_res
+  , `nearest neighbor` = aatd_nn_res
+  # , `linear svm` = aatd_svm1_res
+  # , `quadratic svm` = aatd_svm2_res
+  # , `cubic svm` = aatd_svm3_res
 ) %>%
   map(metrics, truth = geno_class, estimate = .pred_class, .pred_Abnormal) %>%
   enframe(name = "model", value = "metrics") %>%
@@ -276,10 +332,12 @@ write_rds(aatd_mod_res_metric, here::here("data/aatd-1-metric.rds"))
 # prediction tables
 list(
   `logistic regression` = aatd_lr_res
+  , `linear discriminant` = aatd_lda_res
   , `random forest` = aatd_rf_res
-  , `linear svm` = aatd_svm1_res
-  , `quadratic svm` = aatd_svm2_res
-  , `cubic svm` = aatd_svm3_res
+  , `nearest neighbor` = aatd_nn_res
+  # , `linear svm` = aatd_svm1_res
+  # , `quadratic svm` = aatd_svm2_res
+  # , `cubic svm` = aatd_svm3_res
 ) %>%
   enframe(name = "model", value = "results") %>%
   mutate(model = fct_inorder(model), predictors = pred, response = resp) %>%

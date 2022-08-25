@@ -6,9 +6,15 @@ read_rds(here::here("data/aatd-eval.rds")) %>%
   print() ->
   aatd_metrics
 
+# check for duplicates
+aatd_metrics %>%
+  count(predictors, response, model, .metric, name = "count") %>%
+  filter(count != 1L)
+
 # compare accuracy
 aatd_metrics %>%
   filter(.metric == "accuracy") %>%
+  mutate(model = fct_rev(model)) %>%
   ggplot(aes(x = mean, xmin = mean - 2 * std_err, xmax = mean + 2 * std_err)) +
   facet_grid(. ~ response, scales = "free_x", space = "free_x") +
   geom_pointrange(
@@ -16,9 +22,15 @@ aatd_metrics %>%
     position = position_dodge(width = 2/3)
   ) +
   scale_y_discrete(limits = rev(levels(aatd_metrics$predictors))) +
-  scale_color_discrete(limits = rev(levels(aatd_metrics$model))) +
-  theme(legend.position = "bottom", legend.direction = "horizontal",
-        axis.text.x = element_text(angle = 30, hjust = 1)) ->
+  scale_color_brewer(
+    type = "qual", palette = 2L, direction = -1,
+    limits = rev(levels(aatd_metrics$model))
+  ) +
+  guides(color = guide_legend(reverse = TRUE)) +
+  theme(
+    legend.position = "bottom", legend.direction = "horizontal",
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  ) ->
   aatd_acc_eval
 print(aatd_acc_eval)
 ggsave(
@@ -29,6 +41,7 @@ ggsave(
 # compare AUC
 aatd_metrics %>%
   filter(.metric == "roc_auc") %>%
+  mutate(predictors = fct_rev(predictors)) %>%
   ggplot(aes(x = mean, xmin = mean - 2 * std_err, xmax = mean + 2 * std_err)) +
   facet_grid(model ~ .) +
   geom_vline(xintercept = .5, linetype = "dotted") +
@@ -37,7 +50,11 @@ aatd_metrics %>%
     position = position_dodge(width = 2/3)
   ) +
   scale_y_discrete(limits = rev(levels(aatd_metrics$response))) +
-  scale_color_discrete(limits = rev(levels(aatd_metrics$predictors))) +
+  scale_color_brewer(
+    type = "qual", palette = 2L, direction = -1,
+    limits = rev(levels(aatd_metrics$predictors))
+  ) +
+  guides(color = guide_legend(reverse = TRUE)) +
   theme(legend.position = "bottom", legend.direction = "horizontal") ->
   aatd_roc_eval
 print(aatd_roc_eval)

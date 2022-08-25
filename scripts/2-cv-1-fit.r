@@ -1,12 +1,14 @@
 library(tidymodels)
+library(discrim)
 library(tidyverse)
+select <- dplyr::select
 
 #' Setup
 
 # hyperparameters
 p_data <- 1/10
 p_data <- 1/6
-#p_data <- 1
+# p_data <- 1
 n_folds <- 3L
 n_folds <- 6L
 
@@ -39,16 +41,28 @@ vars_response <- list(
 #' 1.0 Model specifications
 
 # logistic regression
-logistic_reg() %>%
+logistic_reg(penalty = 1) %>%
   set_engine("glm") %>%
   set_mode("classification") ->
   aatd_lr_spec
 
+# linear discriminant analysis
+discrim_linear(penalty = 1) %>%
+  set_engine("MASS") %>%
+  set_mode("classification") ->
+  aatd_lda_spec
+
 # random forest
-rand_forest(trees = 120L) %>%
+rand_forest(mtry = NULL, trees = 120L) %>%
   set_engine("randomForest") %>%
   set_mode("classification") ->
   aatd_rf_spec
+
+# nearest neighbor
+nearest_neighbor(neighbors = 360L, weight_func = "triangular") %>%
+  set_engine("kknn") %>%
+  set_mode("classification") ->
+  aatd_nn_spec
 
 # linear SVM
 svm_linear() %>%
@@ -98,7 +112,7 @@ print(str_c("Predictors: ", pred))
 print(str_c("Response: ", resp))
 print("--------------------------------")
 
-#' 1.1. Pre-process data
+#' Pre-process data
 
 # load and subset predictors data
 read_rds(here::here("data/aatd-pred.rds")) %>%
@@ -125,7 +139,7 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
   inner_join(aatd_data, by = "record_id") ->
   aatd_data
 
-#' 1.2. Specify models
+#' Specify models
 
 # prepare regression recipe
 recipe(aatd_data, geno_class ~ .) %>%
@@ -147,32 +161,12 @@ recipe(aatd_data, geno_class ~ .) %>%
   prep() ->
   aatd_num_rec
 
-#' 1.3. COPD indication
-
-aatd_data %>%
-  transmute(screen = lung_hx_copd, test = geno_class == "Abnormal") %>%
-  count(screen, test, name = "count") %>%
-  mutate(quadrant = case_when(
-    screen & test ~ "TP",
-    ! screen & ! test ~ "TN",
-    screen & ! test ~ "FP",
-    ! screen & test ~ "FN"
-  )) %>%
-  pivot_wider(id_cols = c(), names_from = quadrant, values_from = count) %>%
-  transmute(
-    sensitivity = TP / (TP + FN),
-    specificity = TN / (TN + FP),
-    precision = TP / (TP + FP),
-    recall = sensitivity
-  ) ->
-  copd_res
-
-#' 1.4. Folds
+#' Folds
 
 # folds for cross-validation evalutaion
 aatd_cv <- vfold_cv(aatd_data, v = n_folds, strata = geno_class)
 
-#' 1.5. Logistic regression
+#' Logistic regression
 
 # fit model
 workflow() %>%
@@ -194,7 +188,28 @@ aatd_metrics %>%
   bind_rows(aatd_lr_metrics) ->
   aatd_metrics
 
-#' 1.6. Random forests
+#' Linear discriminant analysis
+
+# fit model
+workflow() %>%
+  add_recipe(aatd_reg_rec) %>%
+  add_model(aatd_lda_spec) %>%
+  fit_resamples(resamples = aatd_cv) ->
+  aatd_lda_fit
+
+# average evaluation
+aatd_lda_fit %>%
+  collect_metrics() %>%
+  mutate(predictors = pred, response = resp, model = "linear discriminant") %>%
+  relocate(predictors, response, model) ->
+  aatd_lda_metrics
+
+# augment results
+aatd_metrics %>%
+  bind_rows(aatd_lda_metrics) ->
+  aatd_metrics
+
+#' Random forests
 
 # fit model
 workflow() %>%
@@ -216,27 +231,49 @@ aatd_metrics %>%
   bind_rows(aatd_rf_metrics) ->
   aatd_metrics
 
-#' 1.7. SVM
+#' Nearest neighbors
 
 # fit model
 workflow() %>%
   #add_formula(geno_class ~ .) %>%
   add_recipe(aatd_num_rec) %>%
-  add_model(aatd_svm1_spec) %>%
+  add_model(aatd_nn_spec) %>%
   fit_resamples(resamples = aatd_cv) ->
-  aatd_svm1_fit
+  aatd_nn_fit
 
 # average evaluation
-aatd_svm1_fit %>%
+aatd_nn_fit %>%
   collect_metrics() %>%
-  mutate(predictors = pred, response = resp, model = "linear svm") %>%
+  mutate(predictors = pred, response = resp, model = "nearest neighbor") %>%
   relocate(predictors, response, model) ->
-  aatd_svm1_metrics
+  aatd_nn_metrics
 
 # augment results
 aatd_metrics %>%
-  bind_rows(aatd_svm1_metrics) ->
+  bind_rows(aatd_nn_metrics) ->
   aatd_metrics
+
+#' SVM
+
+# # fit model
+# workflow() %>%
+#   #add_formula(geno_class ~ .) %>%
+#   add_recipe(aatd_num_rec) %>%
+#   add_model(aatd_svm1_spec) %>%
+#   fit_resamples(resamples = aatd_cv) ->
+#   aatd_svm1_fit
+# 
+# # average evaluation
+# aatd_svm1_fit %>%
+#   collect_metrics() %>%
+#   mutate(predictors = pred, response = resp, model = "linear svm") %>%
+#   relocate(predictors, response, model) ->
+#   aatd_svm1_metrics
+# 
+# # augment results
+# aatd_metrics %>%
+#   bind_rows(aatd_svm1_metrics) ->
+#   aatd_metrics
 
 # # fit model
 # workflow() %>%
