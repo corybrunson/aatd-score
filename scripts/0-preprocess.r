@@ -47,6 +47,7 @@ aatd_data %>%
   t() %>% as.data.frame() %>%
   set_names("Missingness") %>%
   rownames_to_column("Variable") %>%
+  mutate(Missingness = str_c(round(Missingness * 100, digits = 0L), "%")) %>%
   knitr::kable()
 
 # age distribution
