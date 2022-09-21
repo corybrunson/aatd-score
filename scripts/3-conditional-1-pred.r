@@ -28,6 +28,18 @@ n_demo <- 4L
 #' Pre-process data
 
 # load and subset predictors data
+# read_rds(here::here("data/aatd-pred.rds")) %>%
+#   sample_frac(size = p_data) %>%
+#   # choice of predictors
+#   select(
+#     record_id,
+#     c(starts_with("lung_"), starts_with("liver_")),
+#     age_calculated, smoking_history_cigarette, any_tobacco_exposure
+#   ) %>%
+#   filter(! is.na(age_calculated) &
+#            smoking_history_cigarette != "(Missing)" &
+#            any_tobacco_exposure != "(Missing)") ->
+#   aatd_data
 read_rds(here::here("data/aatd-pred.rds")) %>%
   sample_frac(size = p_data) %>%
   # choice of predictors
@@ -63,10 +75,9 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
   ) %>%
   inner_join(aatd_data, by = "record_id") ->
   aatd_data
-# inspect responses
+# tally responses
 aatd_data %>%
-  select(starts_with("geno")) %>%
-  distinct() %>%
+  count(genotype, geno_class, geno_abtype) %>%
   arrange(geno_abtype, geno_class)
 
 #' Model specifications

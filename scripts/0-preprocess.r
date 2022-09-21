@@ -1,15 +1,11 @@
 library(tidyverse)
 library(lubridate)
 library(magrittr)
+library(visdat)
 
 here::here("data-raw/AAT Detection Database_deidenti.xlsx") %>%
   readxl::read_xlsx() %>%
   rename_with(snakecase::to_snake_case, everything()) %>%
-  # remove extraneous variables
-  # select(
-  #   -date_of_birth, -genotype_simple,
-  #   -patient_received_what_is_alpha_1_brochure, -physician_address_zipcode
-  # ) %>%
   # format dates as dates
   mutate(across(contains("date"), as_date, format = "%m/%d/%Y")) %>%
   # coerce checkbox and yes/no responses to logical
@@ -61,7 +57,8 @@ aatd_data %>%
   summarize(across(
     date_received,
     list(min = min, max = max, mean = mean, median = median)
-  ))
+  )) %>%
+  glimpse()
 aatd_data %>%
   ggplot(aes(x = date_received)) +
   geom_histogram()
@@ -70,9 +67,9 @@ aatd_data %>%
   mutate(row = row_number()) %>%
   filter(is.na(age_calculated)) %>%
   filter(! is.na(date_of_birth) & ! is.na(date_received)) %>%
-  mutate(age_guess = interval(date_of_birth, date_received) / years(1)) %>%
-  select(row, date_of_birth, date_received, age_guess) %>%
-  print() %T>% { hist(.$age_guess) } %>%
+  mutate(age_calc = interval(date_of_birth, date_received) / years(1)) %>%
+  select(row, date_of_birth, date_received, age_calc) %>%
+  print() %T>% { hist(.$age_calc) } %>%
   mutate(contiguous_group = cumsum(is.na(lag(row)) | row != lag(row) + 1L)) %>%
   select(row, contiguous_group) %>%
   group_by(contiguous_group) %>%
@@ -83,11 +80,15 @@ aatd_data %>%
 aatd_data %>%
   mutate(age_avail = case_when(
     ! is.na(age_calculated) ~ "already calculated",
-    ! is.na(date_of_birth) & ! is.na(date_received) ~ "birth & reception date",
+    ! is.na(date_of_birth) & ! is.na(date_received) &
+      interval(date_of_birth, date_received) / years(1) < -3/4 ~ "implausible",
+    ! is.na(date_of_birth) & ! is.na(date_received) &
+      interval(date_of_birth, date_received) / years(1) <= 0 ~ "in utero?",
+    ! is.na(date_of_birth) & ! is.na(date_received) ~ "birth & receipt dates",
     ! is.na(date_of_birth) ~ "birth date only",
     TRUE ~ "nothing"
   )) %>%
-  #count(age_avail)
+  # count(age_avail)
   mutate(age_guess = case_when(
     ! is.na(age_calculated) ~ age_calculated,
     ! is.na(date_of_birth) & ! is.na(date_received) ~
@@ -109,10 +110,14 @@ aatd_data %>%
   mutate(batch = cut(row, c(0, 5e4, 2e5, Inf))) %>%
   ggplot(aes(x = batch, y = date_received)) +
   geom_boxplot()
+# missingness plot
+aatd_data %>%
+  select(-record_id, -genotype_simple, -starts_with("aat_")) %>%
+  vis_dat(warn_large_data = FALSE)
 
 # transform variables in preparation for predictive modeling
 aatd_data %>%
-  # impute reception dates
+  # impute reception date guesses
   mutate(receipt_date = ! is.na(date_received)) %>%
   mutate(date_received_impute = if_else(
     is.na(date_received),
@@ -132,7 +137,7 @@ aatd_data %>%
   )) %>%
   # note: not enough `date_received` values for temporal validation
   select(
-    -date_of_birth, -date_received, -date_received_impute, -age_calculated
+    -date_of_birth, -date_received, -date_received_impute
   ) %>%
   # drop response variables
   select(-starts_with("genotype"), -starts_with("aat_")) %>%
@@ -153,7 +158,8 @@ aatd_data %>%
     c(gender, race, smoking_history_cigarette, any_tobacco_exposure),
     ~ fct_explicit_na(factor(.))
   )) %>%
-  drop_na() %>%
+  # allow missing values of calculated age
+  drop_na(-age_calculated) %>%
   print() ->
   aatd_pred
 
