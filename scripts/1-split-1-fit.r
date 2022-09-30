@@ -1,12 +1,17 @@
-#' This script uses several families of models to predict abnormal genotype from
-#' liver and lung disease histories and other personal factors. Each combination
-#' of predictors, response, and model is conducted, and for each combination of
-#' predictors and response the models are compared using performance curves.
-#' Fixed parameter values are used for all models. On each plot of curves is
-#' superimposed the performance of COPD as a screening indication. Evaluations
-#' are performed using a designated subset of the data, partitioned into
-#' training and testing sets in a designated proportion.
-#' 
+#' Consider predictive model engines on AAT genotype data
+#'
+#' The purpose of this script is to quickly compare the performance of several
+#' predictive modeling engines (algorithms) and decide their suitability for a
+#' more rigorous test. The script uses several predictive algorithms to predict
+#' abnormal genotype from liver and lung disease histories and, optionally,
+#' other personal factors. Each combination of predictors, response, and model
+#' is used, and for each combination of predictors and response the models are
+#' compared using performance curves. Fixed parameter values are used for all
+#' models. On each plot of curves is superimposed the performance of COPD as a
+#' screening indication. Evaluations are performed using a designated subset of
+#' the data, partitioned into training and testing sets in a designated
+#' proportion.
+#'
 #' See here for model families available through {parsnip}:
 #' https://www.tidymodels.org/find/parsnip/
 
@@ -28,9 +33,9 @@ genotype_incl <- read_rds(here::here("data/genotype-incl.rds"))
 # model specifications as tidy selections
 vars_predictors <- list(
   Dx = expr(c(starts_with("lung_"), starts_with("liver_"))),
-  `Dx+age` =
-    expr(c(contains("age_guess"), contains("receipt_date"),
-           starts_with("lung_"), starts_with("liver_"))),
+  # `Dx+age` =
+  #   expr(c(contains("age_guess"), contains("receipt_date"),
+  #          starts_with("lung_"), starts_with("liver_"))),
   `Dx+gender` =
     expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_"))),
   `Dx+tobacco` =
