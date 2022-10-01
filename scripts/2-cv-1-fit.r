@@ -1,15 +1,28 @@
-library(tidymodels)
-library(discrim)
+#' Compare model specifications and engines at AAT genotype prediction
+#'
+#' The purpose of this script is to evaluate several optimized predictive models
+#' of abnormal AAT genotype. The script compares several model specifications
+#' (lung and liver history alone or together with either gender or smoking
+#' history) and a subset of the engines considered in a previous script
+#' (logistic regression, random forest, and nearest neighbor). The same data set
+#' is used for all evaluations and comparisons. Models are tuned and evaluated
+#' using folded cross-validation on these data. The partitions are stratified by
+#' genotype class (abnormal versus normal). Each comparison also includes the
+#' current guideline of COPD as the sole indication for screening.
+
 library(tidyverse)
-select <- dplyr::select
+# library(discrim)
+library(tidymodels)
+# select <- dplyr::select
 
 #' Setup
 
 # hyperparameters
-p_data <- 1/10
-p_data <- 1/6
-# p_data <- 1
-n_folds <- 3L
+# p_data <- 1/10
+# p_data <- 1/6
+p_data <- 1
+n_nests <- 6L
+# n_folds <- 3L
 n_folds <- 6L
 
 # genotypes to include in analysis
@@ -18,14 +31,14 @@ genotype_incl <- read_rds(here::here("data/genotype-incl.rds"))
 # model specifications as tidy selections
 vars_predictors <- list(
   Dx = expr(c(starts_with("lung_"), starts_with("liver_"))),
-  `Dx+age` =
-    expr(c(contains("age_guess"), contains("receipt_date"),
-           starts_with("lung_"), starts_with("liver_"))),
+  # `Dx+age` =
+  #   expr(c(contains("age_guess"), contains("receipt_date"),
+  #          starts_with("lung_"), starts_with("liver_"))),
   `Dx+gender` =
     expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_"))),
   `Dx+tobacco` =
     expr(c(contains("smoking_history_cigarette"),
-           contains("any_tobacco_exposure"),
+           # contains("any_tobacco_exposure"),
            starts_with("lung_"), starts_with("liver_")))
 )
 
@@ -38,10 +51,24 @@ vars_response <- list(
   Ab = expr(genotype != "MM")
 )
 
-#' 1.0 Model specifications
+#' Subset data
+
+read_rds(here::here("data/aatd-pred.rds")) %>%
+  sample_frac(size = p_data) %>%
+  # all predictors from any specification
+  select(record_id, unique(unlist(sapply(vars_predictors, eval)))) %>%
+  # filter missing gender
+  filter(gender != "(Missing)") %>%
+  # drop any cases with missing values
+  drop_na() %>%
+  # store `record_id`
+  select(record_id) ->
+  elig_ids
+
+#' Model specifications
 
 # logistic regression
-logistic_reg(penalty = 1) %>%
+logistic_reg(penalty = tune()) %>%
   set_engine("glm") %>%
   set_mode("classification") ->
   aatd_lr_spec
@@ -117,8 +144,12 @@ print("--------------------------------")
 # load and subset predictors data
 read_rds(here::here("data/aatd-pred.rds")) %>%
   sample_frac(size = p_data) %>%
-  # choice of predictors
-  select(record_id, eval(vars_predictors[[i_pred]])) ->
+  # predictors from current specification
+  select(record_id, eval(vars_predictors[[i_pred]])) %>%
+  # eligible records
+  semi_join(elig_ids, by = "record_id") %>%
+  # remove empty factor levels
+  mutate(across(where(is.factor), fct_drop)) ->
   aatd_data
 
 # join in responses
@@ -163,7 +194,7 @@ recipe(aatd_data, geno_class ~ .) %>%
 
 #' Folds
 
-# folds for cross-validation evalutaion
+# folds for cross-validation evaluation
 aatd_cv <- vfold_cv(aatd_data, v = n_folds, strata = geno_class)
 
 #' Logistic regression
@@ -190,24 +221,24 @@ aatd_metrics %>%
 
 #' Linear discriminant analysis
 
-# fit model
-workflow() %>%
-  add_recipe(aatd_reg_rec) %>%
-  add_model(aatd_lda_spec) %>%
-  fit_resamples(resamples = aatd_cv) ->
-  aatd_lda_fit
+# # fit model
+# workflow() %>%
+#   add_recipe(aatd_reg_rec) %>%
+#   add_model(aatd_lda_spec) %>%
+#   fit_resamples(resamples = aatd_cv) ->
+#   aatd_lda_fit
 
-# average evaluation
-aatd_lda_fit %>%
-  collect_metrics() %>%
-  mutate(predictors = pred, response = resp, model = "linear discriminant") %>%
-  relocate(predictors, response, model) ->
-  aatd_lda_metrics
+# # average evaluation
+# aatd_lda_fit %>%
+#   collect_metrics() %>%
+#   mutate(predictors = pred, response = resp, model = "linear discriminant") %>%
+#   relocate(predictors, response, model) ->
+#   aatd_lda_metrics
 
-# augment results
-aatd_metrics %>%
-  bind_rows(aatd_lda_metrics) ->
-  aatd_metrics
+# # augment results
+# aatd_metrics %>%
+#   bind_rows(aatd_lda_metrics) ->
+#   aatd_metrics
 
 #' Random forests
 
