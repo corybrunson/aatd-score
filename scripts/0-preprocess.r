@@ -116,30 +116,45 @@ aatd_data %>%
   select(-record_id, -genotype_simple, -starts_with("aat_")) %>%
   vis_dat(warn_large_data = FALSE)
 
+# define age groups based on data collection window
+aatd_data %>%
+  pull(date_received) %>% range(na.rm = TRUE) %>%
+  print() -> receipt_range
+aatd_data %>%
+  # change implausible birth dates to missing values
+  mutate(date_of_birth = case_when(
+    date_of_birth > "2015-06-29" ~ NA_Date_,
+    interval(date_of_birth, date_received) / years(1) < -3/4 ~ NA_Date_,
+    TRUE ~ date_of_birth
+  )) %>%
+  pull(date_of_birth) %>% range(na.rm = TRUE) %>%
+  print() -> birth_range
+# could implausible dates be reversed? (yes, it could be)
+aatd_data %>%
+  filter(interval(date_of_birth, date_received) / years(1) < -3/4) %>%
+  filter(date_of_birth < receipt_range[[1L]])
+aatd_data %>%
+  filter(interval(date_of_birth, date_received) / years(1) < -3/4) %>%
+  filter(date_received > birth_range[[2L]])
+
 # transform variables in preparation for predictive modeling
 aatd_data %>%
-  # impute reception date guesses
-  mutate(receipt_date = ! is.na(date_received)) %>%
-  mutate(date_received_impute = if_else(
-    is.na(date_received),
-    date_received[sample(
-      which(! is.na(date_received)),
-      nrow(aatd_data), replace = TRUE
-    )],
-    date_received
-  )) %>%
-  # guess ages
-  mutate(age_guess = case_when(
-    ! is.na(age_calculated) ~ age_calculated,
-    ! is.na(date_of_birth) & ! is.na(date_received) ~ NA_real_,
-    ! is.na(date_of_birth) ~
-      interval(date_of_birth, date_received_impute) / years(1),
-    TRUE ~ NA_real_
-  )) %>%
+  # flag missing reception dates
+  # change implausible birth dates to missing values
   # note: not enough `date_received` values for temporal validation
-  select(
-    -date_of_birth, -date_received, -date_received_impute
-  ) %>%
+  mutate(date_received = case_when(
+    interval(date_of_birth, date_received) / years(1) < -3/4 ~ NA_Date_,
+    TRUE ~ date_received
+  )) %>%
+  mutate(date_of_birth = case_when(
+    date_of_birth > receipt_range[[2L]] ~ NA_Date_,
+    interval(date_of_birth, date_received) / years(1) < -3/4 ~ NA_Date_,
+    TRUE ~ date_of_birth
+  )) %>%
+  mutate(age_calculated = case_when(
+    interval(date_of_birth, date_received) / years(1) < -3/4 ~ NA_real_,
+    TRUE ~ age_calculated
+  )) %>%
   # drop response variables
   select(-starts_with("genotype"), -starts_with("aat_")) %>%
   # multiple packs per day by years
@@ -159,17 +174,8 @@ aatd_data %>%
     c(gender, race, smoking_history_cigarette, any_tobacco_exposure),
     ~ fct_explicit_na(factor(.))
   )) %>%
-  # allow missing values of calculated age
-  drop_na(-age_calculated) %>%
   print() ->
   aatd_pred
-
-# age guess distribution
-ggplot(aatd_pred, aes(x = age_guess)) + geom_histogram()
-aatd_pred %>%
-  ggplot(aes(x = age_guess)) +
-  facet_grid(receipt_date ~ ., scales = "free_y") +
-  geom_histogram()
 
 # join response variables back in (regardless of missingness)
 aatd_data %>%
