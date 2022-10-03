@@ -65,50 +65,55 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
   select(record_id) ->
   elig_ids
 
+#' Evaluation measures
+
+# measures to calculate
+aatd_met <- metric_set(accuracy, roc_auc, pr_auc)
+
 #' Model specifications
+
+# tuning restrictions
+read_rds(here::here("data/aatd-pred.rds")) %>%
+  sample_frac(size = p_data) %>%
+  # all predictors from any specification
+  select(unique(unlist(sapply(vars_predictors, eval)))) %>%
+  ncol() ->
+  n_pred
+mtry_values <- c(
+  round(n_pred ^ (1/3)),
+  round(sqrt(n_pred)),
+  round(n_pred / 2),
+  n_pred
+)
 
 # logistic regression
 logistic_reg(penalty = tune()) %>%
   set_engine("glm") %>%
   set_mode("classification") ->
   aatd_lr_spec
+aatd_lr_grid <- grid_regular(penalty(), levels = 6L)
 
-# linear discriminant analysis
-discrim_linear(penalty = 1) %>%
-  set_engine("MASS") %>%
-  set_mode("classification") ->
-  aatd_lda_spec
+# # linear discriminant analysis
+# discrim_linear(penalty = tune()) %>%
+#   set_engine("MASS") %>%
+#   set_mode("classification") ->
+#   aatd_lda_spec
 
 # random forest
-rand_forest(mtry = NULL, trees = 120L) %>%
+rand_forest(mtry = tune(), trees = tune()) %>%
   set_engine("randomForest") %>%
   set_mode("classification") ->
   aatd_rf_spec
+grid_regular(trees(), levels = 6L) %>%
+  crossing(mtry = mtry_values) ->
+  aatd_rf_grid
 
 # nearest neighbor
-nearest_neighbor(neighbors = 360L, weight_func = "triangular") %>%
+nearest_neighbor(neighbors = tune(), weight_func = tune()) %>%
   set_engine("kknn") %>%
   set_mode("classification") ->
   aatd_nn_spec
-
-# linear SVM
-svm_linear() %>%
-  #set_engine("LiblineaR") %>%
-  set_engine("kernlab") %>%
-  set_mode("classification") ->
-  aatd_svm1_spec
-
-# quadratic SVM
-svm_poly(degree = 2L) %>%
-  set_engine("kernlab") %>%
-  set_mode("classification") ->
-  aatd_svm2_spec
-
-# cubic SVM
-svm_poly(degree = 3L) %>%
-  set_engine("kernlab") %>%
-  set_mode("classification") ->
-  aatd_svm3_spec
+aatd_nn_grid <- grid_regular(neighbors(), weight_func(), levels = 6L)
 
 # progress bar
 n_loop <- length(vars_predictors) * length(vars_response)
@@ -170,7 +175,7 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
   inner_join(aatd_data, by = "record_id") ->
   aatd_data
 
-#' Specify models
+#' Specify pre-processing recipes
 
 # prepare regression recipe
 recipe(aatd_data, geno_class ~ .) %>%
@@ -198,6 +203,11 @@ recipe(aatd_data, geno_class ~ .) %>%
 aatd_cv <- vfold_cv(aatd_data, v = n_folds, strata = geno_class)
 
 #' Logistic regression
+
+# tune parameter(s)
+tune_grid(aatd_lr_spec, aatd_reg_rec,
+          resamples = aatd_cv, grid = aatd_lr_grid, metrics = aatd_met) ->
+  aatd_lr_tune
 
 # fit model
 workflow() %>%
@@ -241,6 +251,11 @@ aatd_metrics %>%
 #   aatd_metrics
 
 #' Random forests
+
+# tune parameter(s)
+tune_grid(aatd_rf_spec, aatd_num_rec,
+          resamples = aatd_cv, grid = aatd_rf_grid, metrics = aatd_met) ->
+  aatd_rf_tune
 
 # fit model
 workflow() %>%
