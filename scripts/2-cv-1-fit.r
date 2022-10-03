@@ -11,9 +11,7 @@
 #' current guideline of COPD as the sole indication for screening.
 
 library(tidyverse)
-# library(discrim)
 library(tidymodels)
-# select <- dplyr::select
 
 #' Setup
 
@@ -73,12 +71,6 @@ logistic_reg(penalty = tune()) %>%
   set_mode("classification") ->
   aatd_lr_spec
 
-# linear discriminant analysis
-discrim_linear(penalty = 1) %>%
-  set_engine("MASS") %>%
-  set_mode("classification") ->
-  aatd_lda_spec
-
 # random forest
 rand_forest(mtry = NULL, trees = 120L) %>%
   set_engine("randomForest") %>%
@@ -90,25 +82,6 @@ nearest_neighbor(neighbors = 360L, weight_func = "triangular") %>%
   set_engine("kknn") %>%
   set_mode("classification") ->
   aatd_nn_spec
-
-# linear SVM
-svm_linear() %>%
-  #set_engine("LiblineaR") %>%
-  set_engine("kernlab") %>%
-  set_mode("classification") ->
-  aatd_svm1_spec
-
-# quadratic SVM
-svm_poly(degree = 2L) %>%
-  set_engine("kernlab") %>%
-  set_mode("classification") ->
-  aatd_svm2_spec
-
-# cubic SVM
-svm_poly(degree = 3L) %>%
-  set_engine("kernlab") %>%
-  set_mode("classification") ->
-  aatd_svm3_spec
 
 # progress bar
 n_loop <- length(vars_predictors) * length(vars_response)
@@ -199,6 +172,14 @@ aatd_cv <- vfold_cv(aatd_data, v = n_folds, strata = geno_class)
 
 #' Logistic regression
 
+# tune hyperparameters
+tune_grid(aatd_lr_spec, aatd_reg_rec, resamples = aatd_cv)
+workflow() %>%
+  #add_formula(geno_class ~ .) %>%
+  add_recipe(aatd_reg_rec) %>%
+  add_model(aatd_lr_spec) %>%
+  tune_grid(resamples = aatd_cv)
+
 # fit model
 workflow() %>%
   #add_formula(geno_class ~ .) %>%
@@ -218,27 +199,6 @@ aatd_lr_fit %>%
 aatd_metrics %>%
   bind_rows(aatd_lr_metrics) ->
   aatd_metrics
-
-#' Linear discriminant analysis
-
-# # fit model
-# workflow() %>%
-#   add_recipe(aatd_reg_rec) %>%
-#   add_model(aatd_lda_spec) %>%
-#   fit_resamples(resamples = aatd_cv) ->
-#   aatd_lda_fit
-
-# # average evaluation
-# aatd_lda_fit %>%
-#   collect_metrics() %>%
-#   mutate(predictors = pred, response = resp, model = "linear discriminant") %>%
-#   relocate(predictors, response, model) ->
-#   aatd_lda_metrics
-
-# # augment results
-# aatd_metrics %>%
-#   bind_rows(aatd_lda_metrics) ->
-#   aatd_metrics
 
 #' Random forests
 
@@ -283,68 +243,6 @@ aatd_nn_fit %>%
 aatd_metrics %>%
   bind_rows(aatd_nn_metrics) ->
   aatd_metrics
-
-#' SVM
-
-# # fit model
-# workflow() %>%
-#   #add_formula(geno_class ~ .) %>%
-#   add_recipe(aatd_num_rec) %>%
-#   add_model(aatd_svm1_spec) %>%
-#   fit_resamples(resamples = aatd_cv) ->
-#   aatd_svm1_fit
-# 
-# # average evaluation
-# aatd_svm1_fit %>%
-#   collect_metrics() %>%
-#   mutate(predictors = pred, response = resp, model = "linear svm") %>%
-#   relocate(predictors, response, model) ->
-#   aatd_svm1_metrics
-# 
-# # augment results
-# aatd_metrics %>%
-#   bind_rows(aatd_svm1_metrics) ->
-#   aatd_metrics
-
-# # fit model
-# workflow() %>%
-#   #add_formula(geno_class ~ .) %>%
-#   add_recipe(aatd_num_rec) %>%
-#   add_model(aatd_svm2_spec) %>%
-#   fit_resamples(resamples = aatd_cv) ->
-#   aatd_svm2_fit
-# 
-# # average evaluation
-# aatd_svm2_fit %>%
-#   collect_metrics() %>%
-#   mutate(predictors = pred, response = resp, model = "quadratic svm") %>%
-#   relocate(predictors, response, model) ->
-#   aatd_svm2_metrics
-# 
-# # augment results
-# aatd_metrics %>%
-#   bind_rows(aatd_svm2_metrics) ->
-#   aatd_metrics
-
-# # fit model
-# workflow() %>%
-#   #add_formula(geno_class ~ .) %>%
-#   add_recipe(aatd_num_rec) %>%
-#   add_model(aatd_svm3_spec) %>%
-#   fit_resamples(resamples = aatd_cv) ->
-#   aatd_svm3_fit
-# 
-# # average evaluation
-# aatd_svm3_fit %>%
-#   collect_metrics() %>%
-#   mutate(predictors = pred, response = resp, model = "cubic svm") %>%
-#   relocate(predictors, response, model) ->
-#   aatd_svm3_metrics
-# 
-# # augment results
-# aatd_metrics %>%
-#   bind_rows(aatd_svm3_metrics) ->
-#   aatd_metrics
 
 write_rds(aatd_metrics, here::here("data/aatd-eval.rds"))
 write_rds(c(i_pred, i_resp), here::here("data/aatd-cv-ii.rds"))
