@@ -19,7 +19,6 @@ library(tidymodels)
 # p_data <- 1/10
 # p_data <- 1/6
 p_data <- 1
-n_nests <- 6L
 # n_folds <- 3L
 n_folds <- 6L
 
@@ -73,31 +72,36 @@ aatd_met <- metric_set(accuracy, roc_auc, pr_auc)
 # tuning restrictions
 read_rds(here::here("data/aatd-pred.rds")) %>%
   sample_frac(size = p_data) %>%
+  nrow() ->
+  n_obs
+read_rds(here::here("data/aatd-pred.rds")) %>%
+  sample_frac(size = p_data) %>%
   # all predictors from any specification
   select(unique(unlist(sapply(vars_predictors, eval)))) %>%
   ncol() ->
   n_pred
+trees_values <- 10 ^ seq(0, 2, by = .5)
 mtry_values <- c(
   round(n_pred ^ (1/3)),
-  round(sqrt(n_pred)),
-  round(n_pred / 2),
-  n_pred
+  round(sqrt(n_pred))
 )
+mtry_values <- unique(mtry_values)
+neighbors_values <- as.integer(10 ^ seq(.5, 2, by = .5))
 
 # logistic regression
-logistic_reg(penalty = tune()) %>%
-  set_engine("glm") %>%
+logistic_reg(penalty = tune(), mixture = 0) %>%
+  set_engine("glmnet") %>%
   set_mode("classification") ->
   aatd_lr_spec
-aatd_lr_grid <- grid_regular(penalty(), levels = 6L)
+grid_regular(penalty(), levels = 6L) ->
+  aatd_lr_grid
 
 # random forest
 rand_forest(mtry = tune(), trees = tune()) %>%
   set_engine("randomForest") %>%
   set_mode("classification") ->
   aatd_rf_spec
-grid_regular(trees(), levels = 6L) %>%
-  crossing(mtry = mtry_values) ->
+crossing(trees = trees_values, mtry = mtry_values) ->
   aatd_rf_grid
 
 # nearest neighbor
@@ -105,11 +109,10 @@ nearest_neighbor(neighbors = tune(), weight_func = tune()) %>%
   set_engine("kknn") %>%
   set_mode("classification") ->
   aatd_nn_spec
-aatd_nn_grid <- grid_regular(neighbors(), weight_func(), levels = 6L)
-
-# progress bar
-n_loop <- length(vars_predictors) * length(vars_response)
-pb <- progress::progress_bar$new(total = n_loop)
+grid_regular(weight_func(), levels = 4L) %>%
+  mutate(weight_func = fct_inorder(weight_func)) %>%
+  crossing(neighbors = neighbors_values) ->
+  aatd_nn_grid
 
 ii <- if (file.exists(here::here("data/aatd-cv-ii.rds"))) {
   read_rds(here::here("data/aatd-cv-ii.rds"))
@@ -125,7 +128,6 @@ aatd_metrics <- if (file.exists(here::here("data/aatd-eval.rds"))) {
 for (i_pred in seq_along(vars_predictors)) {#LOOP
 for (i_resp in seq_along(vars_response)) {#LOOP
 
-pb$tick()
 if (i_pred < ii[[1L]] || (i_pred == ii[[1L]] && i_resp < ii[[2L]])) next
 
 pred <- names(vars_predictors)[[i_pred]]
@@ -174,6 +176,10 @@ recipe(aatd_data, geno_class ~ .) %>%
   # stop treating the ID as a predictor
   #update_role(record_id, new_role = "id variable") %>%
   step_rm(record_id, genotype, ends_with("_none")) %>%
+  # one-hot encoding of factors
+  step_dummy(all_nominal_predictors(), one_hot = FALSE) %>%
+  # binary encoding of logicals
+  step_mutate_at(has_type(match = "logical"), fn = as.integer) %>%
   prep() ->
   aatd_reg_rec
 
@@ -196,89 +202,199 @@ aatd_cv <- vfold_cv(aatd_data, v = n_folds, strata = geno_class)
 
 #' Logistic regression
 
-# tune hyperparameters
-tune_grid(aatd_lr_spec, aatd_reg_rec, resamples = aatd_cv)
-tune_grid(aatd_lr_spec, aatd_reg_rec,
-          resamples = aatd_cv, grid = aatd_lr_grid, metrics = aatd_met) ->
-  aatd_lr_tune
-workflow() %>%
-  #add_formula(geno_class ~ .) %>%
-  add_recipe(aatd_reg_rec) %>%
-  add_model(aatd_lr_spec) %>%
-  tune_grid(resamples = aatd_cv)
+# # tune hyperparameters
+# workflow() %>%
+#   #add_formula(geno_class ~ .) %>%
+#   add_recipe(aatd_reg_rec) %>%
+#   add_model(aatd_lr_spec) %>%
+#   tune_grid(resamples = aatd_cv, grid = aatd_lr_grid, metrics = aatd_met)
+# 
+# # fit model
+# workflow() %>%
+#   #add_formula(geno_class ~ .) %>%
+#   add_recipe(aatd_reg_rec) %>%
+#   add_model(aatd_lr_spec) %>%
+#   fit_resamples(resamples = aatd_cv) ->
+#   aatd_lr_fit
+# 
+# # average evaluation
+# aatd_lr_fit %>%
+#   collect_metrics() %>%
+#   mutate(predictors = pred, response = resp, model = "logistic regression") %>%
+#   relocate(predictors, response, model) ->
+#   aatd_lr_metrics
+# 
+# # augment results
+# aatd_metrics %>%
+#   bind_rows(aatd_lr_metrics) ->
+#   aatd_metrics
 
-# fit model
-workflow() %>%
-  #add_formula(geno_class ~ .) %>%
-  add_recipe(aatd_reg_rec) %>%
-  add_model(aatd_lr_spec) %>%
-  fit_resamples(resamples = aatd_cv) ->
-  aatd_lr_fit
-
-# average evaluation
-aatd_lr_fit %>%
-  collect_metrics() %>%
-  mutate(predictors = pred, response = resp, model = "logistic regression") %>%
-  relocate(predictors, response, model) ->
-  aatd_lr_metrics
-
-# augment results
-aatd_metrics %>%
-  bind_rows(aatd_lr_metrics) ->
-  aatd_metrics
+# tune hyperparameters & record metrics (manually, since *tidymodels* won't)
+crossing(aatd_lr_grid, transmute(aatd_cv, id, fold = row_number())) %>%
+  mutate(metrics = vector(mode = "list", length = nrow(.))) ->
+  aatd_lr_met
+pb <- progress::progress_bar$new(
+  format = "Logistic regression [:bar] :percent",
+  total = nrow(aatd_lr_met), clear = FALSE
+)
+for (i in rev(seq(nrow(aatd_lr_met)))) {
+  fold_i <- aatd_lr_met$fold[[i]]
+  penalty_i <- aatd_lr_met$penalty[[i]]
+  # mixture_i <- aatd_lr_met$mixture[[i]]
+  train_i <- bake(aatd_reg_rec, new_data = training(aatd_cv$splits[[fold_i]]))
+  test_i <- bake(aatd_reg_rec, new_data = testing(aatd_cv$splits[[fold_i]]))
+  logistic_reg(penalty = penalty_i, mixture = 0) %>%
+    set_engine("glmnet") %>%
+    set_mode("classification") %>%
+    fit(geno_class ~ ., train_i) ->
+    fit_i
+  bind_cols(
+    select(test_i, class = geno_class),
+    predict(fit_i, new_data = test_i),
+    predict(fit_i, new_data = test_i, type = "prob")
+  ) %>%
+    metrics(truth = class, estimate = .pred_class, .pred_Abnormal) ->
+    met_i
+  aatd_lr_met$metrics[[i]] <- met_i
+  pb$tick()
+}
+aatd_lr_met %>%
+  mutate(
+    model = "logistic regression",
+    predictors = pred, response = resp
+  ) %>%
+  select(-fold) %>%
+  unnest(metrics) %>%
+  nest(hyperparameters = c(penalty)) ->
+  aatd_lr_met
+aatd_metrics <- bind_rows(aatd_metrics, aatd_lr_met)
 
 #' Random forests
 
-# tune parameter(s)
-tune_grid(aatd_rf_spec, aatd_num_rec,
-          resamples = aatd_cv, grid = aatd_rf_grid, metrics = aatd_met) ->
-  aatd_rf_tune
+# # fit model
+# workflow() %>%
+#   #add_formula(geno_class ~ .) %>%
+#   add_recipe(aatd_num_rec) %>%
+#   add_model(aatd_rf_spec) %>%
+#   fit_resamples(resamples = aatd_cv) ->
+#   aatd_rf_fit
+# 
+# # average evaluation
+# aatd_rf_fit %>%
+#   collect_metrics() %>%
+#   mutate(predictors = pred, response = resp, model = "random forest") %>%
+#   relocate(predictors, response, model) ->
+#   aatd_rf_metrics
+# 
+# # augment results
+# aatd_metrics %>%
+#   bind_rows(aatd_rf_metrics) ->
+#   aatd_metrics
 
-# fit model
-workflow() %>%
-  #add_formula(geno_class ~ .) %>%
-  add_recipe(aatd_num_rec) %>%
-  add_model(aatd_rf_spec) %>%
-  fit_resamples(resamples = aatd_cv) ->
-  aatd_rf_fit
-
-# average evaluation
-aatd_rf_fit %>%
-  collect_metrics() %>%
-  mutate(predictors = pred, response = resp, model = "random forest") %>%
-  relocate(predictors, response, model) ->
-  aatd_rf_metrics
-
-# augment results
-aatd_metrics %>%
-  bind_rows(aatd_rf_metrics) ->
-  aatd_metrics
+# tune hyperparameters & record metrics
+crossing(aatd_rf_grid, transmute(aatd_cv, id, fold = row_number())) %>%
+  mutate(metrics = vector(mode = "list", length = nrow(.))) ->
+  aatd_rf_met
+pb <- progress::progress_bar$new(
+  format = "Random forest [:bar] :percent",
+  total = nrow(aatd_rf_met), clear = FALSE
+)
+for (i in rev(seq(nrow(aatd_rf_met)))) {
+  fold_i <- aatd_rf_met$fold[[i]]
+  mtry_i <- aatd_rf_met$mtry[[i]]
+  trees_i <- aatd_rf_met$trees[[i]]
+  train_i <- bake(aatd_num_rec, new_data = training(aatd_cv$splits[[fold_i]]))
+  test_i <- bake(aatd_num_rec, new_data = testing(aatd_cv$splits[[fold_i]]))
+  rand_forest(mtry = mtry_i, trees = trees_i) %>%
+    set_engine("randomForest") %>%
+    set_mode("classification") %>%
+    fit(geno_class ~ ., train_i) ->
+    fit_i
+  bind_cols(
+    select(test_i, class = geno_class),
+    predict(fit_i, new_data = test_i),
+    predict(fit_i, new_data = test_i, type = "prob")
+  ) %>%
+    metrics(truth = class, estimate = .pred_class, .pred_Abnormal) ->
+    met_i
+  aatd_rf_met$metrics[[i]] <- met_i
+  pb$tick()
+}
+aatd_rf_met %>%
+  mutate(
+    model = "random forest",
+    predictors = pred, response = resp
+  ) %>%
+  select(-fold) %>%
+  unnest(metrics) %>%
+  nest(hyperparameters = c(mtry, trees)) ->
+  aatd_rf_met
+aatd_metrics <- bind_rows(aatd_metrics, aatd_rf_met)
 
 #' Nearest neighbors
 
-# fit model
-workflow() %>%
-  #add_formula(geno_class ~ .) %>%
-  add_recipe(aatd_num_rec) %>%
-  add_model(aatd_nn_spec) %>%
-  fit_resamples(resamples = aatd_cv) ->
-  aatd_nn_fit
+# # fit model
+# workflow() %>%
+#   #add_formula(geno_class ~ .) %>%
+#   add_recipe(aatd_num_rec) %>%
+#   add_model(aatd_nn_spec) %>%
+#   fit_resamples(resamples = aatd_cv) ->
+#   aatd_nn_fit
+# 
+# # average evaluation
+# aatd_nn_fit %>%
+#   collect_metrics() %>%
+#   mutate(predictors = pred, response = resp, model = "nearest neighbor") %>%
+#   relocate(predictors, response, model) ->
+#   aatd_nn_metrics
+# 
+# # augment results
+# aatd_metrics %>%
+#   bind_rows(aatd_nn_metrics) ->
+#   aatd_metrics
 
-# average evaluation
-aatd_nn_fit %>%
-  collect_metrics() %>%
-  mutate(predictors = pred, response = resp, model = "nearest neighbor") %>%
-  relocate(predictors, response, model) ->
-  aatd_nn_metrics
-
-# augment results
-aatd_metrics %>%
-  bind_rows(aatd_nn_metrics) ->
-  aatd_metrics
+# # tune hyperparameters & record metrics
+# crossing(aatd_nn_grid, transmute(aatd_cv, id, fold = row_number())) %>%
+#   mutate(metrics = vector(mode = "list", length = nrow(.))) ->
+#   aatd_nn_met
+# pb <- progress::progress_bar$new(
+#   format = "Nearest neighbors [:bar] :percent",
+#   total = nrow(aatd_nn_met), clear = FALSE
+# )
+# for (i in rev(seq(nrow(aatd_nn_met)))) {
+#   fold_i <- aatd_nn_met$fold[[i]]
+#   neighbors_i <- aatd_nn_met$neighbors[[i]]
+#   weight_func_i <- as.character(aatd_nn_met$weight_func[[i]])
+#   train_i <- bake(aatd_num_rec, new_data = training(aatd_cv$splits[[fold_i]]))
+#   test_i <- bake(aatd_num_rec, new_data = testing(aatd_cv$splits[[fold_i]]))
+#   nearest_neighbor(neighbors = neighbors_i, weight_func = weight_func_i) %>%
+#     set_engine("kknn") %>%
+#     set_mode("classification") %>%
+#     fit(geno_class ~ ., train_i) ->
+#     fit_i
+#   bind_cols(
+#     select(test_i, class = geno_class),
+#     predict(fit_i, new_data = test_i),
+#     predict(fit_i, new_data = test_i, type = "prob")
+#   ) %>%
+#     metrics(truth = class, estimate = .pred_class, .pred_Abnormal) ->
+#     met_i
+#   aatd_nn_met$metrics[[i]] <- met_i
+#   pb$tick()
+# }
+# aatd_nn_met %>%
+#   mutate(
+#     model = "nearest neighbors",
+#     predictors = pred, response = resp
+#   ) %>%
+#   select(-fold) %>%
+#   unnest(metrics) %>%
+#   nest(hyperparameters = c(neighbors, weight_func)) ->
+#   aatd_nn_met
+# aatd_metrics <- bind_rows(aatd_metrics, aatd_nn_met)
 
 write_rds(aatd_metrics, here::here("data/aatd-eval.rds"))
 write_rds(c(i_pred, i_resp), here::here("data/aatd-cv-ii.rds"))
 
 }#LOOP
 }#LOOP
-

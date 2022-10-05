@@ -8,8 +8,75 @@ read_rds(here::here("data/aatd-eval.rds")) %>%
 
 # check for duplicates
 aatd_metrics %>%
-  count(predictors, response, model, .metric, name = "count") %>%
-  filter(count != 1L)
+  unnest(hyperparameters) %>%
+  count(predictors, response, model, .metric, .estimator, name = "count") %>%
+  count(predictors, response, model, count, name = "n")
+
+# compare accuracy across hyperparameter settings
+aatd_metrics %>%
+  unnest(hyperparameters) %>%
+  group_by_at(vars(-id, -.estimate)) %>%
+  summarize(mean = mean(.estimate), .groups = "drop") %>%
+  filter(.metric == "accuracy") %>%
+  mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
+  mutate(formula = fct_rev(formula)) %>%
+  ggplot(aes(x = mean, y = formula)) +
+  facet_grid(model ~ .) +
+  geom_boxplot() +
+  labs(x = "Accuracy", y = "Predictors -> Response")
+# choice of response is determinative; need to compare models of same response
+
+# compare accuracy across hyperparameter settings: ZZ (greatest accuracy)
+aatd_metrics %>%
+  filter(response == "ZZ") %>%
+  unnest(hyperparameters) %>%
+  group_by_at(vars(-id, -.estimate)) %>%
+  summarize(mean = mean(.estimate)) %>%
+  filter(.metric == "accuracy") %>%
+  mutate(predictors = fct_rev(predictors)) %>%
+  ggplot(aes(x = mean, y = predictors)) +
+  facet_grid(model ~ .) +
+  geom_jitter(width = 0, height = 1/6, alpha = .5) +
+  labs(x = "Accuracy", y = "Predictors") +
+  ggtitle("Accuracy of predictive models of ZZ genotype")
+# logistic regression is more reliable, but random forest achieves greater
+# performance
+
+# best parameter settings for each model and formula by two measures
+aatd_metrics %>%
+  filter(.metric == "accuracy" | .metric == "roc_auc") %>%
+  group_by_at(vars(-id, -.estimate)) %>%
+  summarize(mean = mean(.estimate), sd = sd(.estimate), .groups = "drop") %>%
+  group_by(model, predictors, response, .metric) %>%
+  filter(mean == max(mean)) %>%
+  unnest(hyperparameters) %>%
+  mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
+  mutate(formula = fct_rev(formula)) %>%
+  ggplot(aes(x = mean, xmin = mean - 2*sd, xmax = mean + 2*sd, y = formula)) +
+  facet_grid(model ~ .metric) +
+  geom_pointrange()
+# logistic regression achieves more robust (AUROC) performance
+
+# track logistic regression performance across penalties
+aatd_metrics %>%
+  filter(model == "logistic regression" & .metric == "roc_auc") %>%
+  group_by_at(vars(-id, -.estimate)) %>%
+  summarize(mean = mean(.estimate), sd = sd(.estimate), .groups = "drop") %>%
+  group_by(model, predictors, response, .metric) %>%
+  # ungroup() %>%
+  unnest(hyperparameters) %>%
+  mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
+  mutate(formula = fct_rev(formula)) %>%
+  ggplot(aes(x = penalty, y = mean, ymin = mean - 2*sd, ymax = mean + 2*sd,
+             color = predictors, linetype = response, group = formula)) +
+  geom_line() +
+  geom_point(
+    data = ~ filter(filter(., mean == max(mean)), penalty == max(penalty))
+  ) +
+  scale_x_continuous(trans = "log", breaks = 10 ^ seq(-9, 0))
+# tobacco use obtains greatest predictive value for each response
+
+stop("Below lies code for an older version of the results data.")
 
 # compare accuracy
 aatd_metrics %>%
