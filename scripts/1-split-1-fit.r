@@ -22,9 +22,9 @@ library(discrim)
 library(tidymodels)
 
 # hyperparameters
-# p_data <- 1/10
+p_data <- 1/10
 # p_data <- 1/6
-p_data <- 1
+# p_data <- 1
 n_train <- 2/3
 
 # genotypes to include in analysis
@@ -66,6 +66,12 @@ discrim_linear(penalty = 1) %>%
   set_engine("MASS") %>%
   set_mode("classification") ->
   aatd_lda_spec
+
+# decision tree, fix parameters
+decision_tree(tree_depth = 6L) %>%
+  set_engine("rpart") %>%
+  set_mode("classification") ->
+  aatd_dt_spec
 
 # random forest, fix parameters
 rand_forest(mtry = NULL, trees = 120L) %>%
@@ -246,6 +252,16 @@ aatd_lda_spec %>%
 # evaluate model
 aatd_lda_res <- fit_results(aatd_lda_fit, aatd_reg_rec)
 
+#' Decision tree classification
+
+# fit model
+aatd_dt_spec %>%
+  fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
+  aatd_dt_fit
+
+# evaluate model
+aatd_dt_res <- fit_results(aatd_dt_fit, aatd_num_rec)
+
 #' Random forest classification
 
 # fit model
@@ -298,6 +314,7 @@ aatd_nn_res <- fit_results(aatd_nn_fit, aatd_num_rec)
 list(
   `logistic regression` = aatd_lr_res
   , `linear discriminant` = aatd_lda_res
+  , `decision tree` = aatd_dt_res
   , `random forest` = aatd_rf_res
   , `nearest neighbor` = aatd_nn_res
   # , `linear svm` = aatd_svm1_res
@@ -318,6 +335,7 @@ write_rds(aatd_mod_res_count, here::here("data/aatd-1-count.rds"))
 list(
   `logistic regression` = aatd_lr_res
   , `linear discriminant` = aatd_lda_res
+  , `decision tree` = aatd_dt_res
   , `random forest` = aatd_rf_res
   , `nearest neighbor` = aatd_nn_res
   # , `linear svm` = aatd_svm1_res
@@ -338,6 +356,7 @@ write_rds(aatd_mod_res_metric, here::here("data/aatd-1-metric.rds"))
 list(
   `logistic regression` = aatd_lr_res
   , `linear discriminant` = aatd_lda_res
+  , `decision tree` = aatd_dt_res
   , `random forest` = aatd_rf_res
   , `nearest neighbor` = aatd_nn_res
   # , `linear svm` = aatd_svm1_res
