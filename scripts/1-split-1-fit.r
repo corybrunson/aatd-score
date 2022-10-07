@@ -59,50 +59,50 @@ vars_response <- list(
 logistic_reg(penalty = 1) %>%
   set_engine("glm") %>%
   set_mode("classification") ->
-  aatd_lr_spec
+  aatd_lr_mod
 
 # linear discriminant analysis, fix parameters
 discrim_linear(penalty = 1) %>%
   set_engine("MASS") %>%
   set_mode("classification") ->
-  aatd_lda_spec
+  aatd_lda_mod
 
 # decision tree, fix parameters
 decision_tree(tree_depth = 6L) %>%
   set_engine("rpart") %>%
   set_mode("classification") ->
-  aatd_dt_spec
+  aatd_dt_mod
 
 # random forest, fix parameters
 rand_forest(mtry = NULL, trees = 120L) %>%
   set_engine("randomForest") %>%
   set_mode("classification") ->
-  aatd_rf_spec
+  aatd_rf_mod
 
 # nearest neighbor, fix parameters
 nearest_neighbor(neighbors = 360L, weight_func = "triangular") %>%
   set_engine("kknn") %>%
   set_mode("classification") ->
-  aatd_nn_spec
+  aatd_nn_mod
 
 # linear SVM, fix parameters
 svm_linear() %>%
   #set_engine("LiblineaR") %>%
   set_engine("kernlab") %>%
   set_mode("classification") ->
-  aatd_svm1_spec
+  aatd_svm1_mod
 
 # quadratic SVM model specification
 svm_poly(degree = 2L) %>%
   set_engine("kernlab") %>%
   set_mode("classification") ->
-  aatd_svm2_spec
+  aatd_svm2_mod
 
 # cubic SVM model specification
 svm_poly(degree = 3L) %>%
   set_engine("kernlab") %>%
   set_mode("classification") ->
-  aatd_svm3_spec
+  aatd_svm3_mod
 
 #' Result tables
 
@@ -235,7 +235,7 @@ fit_results <- function(fit, rec) {
 #' Logistic regression
 
 # fit model
-aatd_lr_spec %>%
+aatd_lr_mod %>%
   fit(geno_class ~ ., bake(aatd_reg_rec, NULL)) ->
   aatd_lr_fit
 
@@ -245,7 +245,7 @@ aatd_lr_res <- fit_results(aatd_lr_fit, aatd_reg_rec)
 #' Linear discriminant analysis
 
 # fit model
-aatd_lda_spec %>%
+aatd_lda_mod %>%
   fit(geno_class ~ ., bake(aatd_reg_rec, NULL)) ->
   aatd_lda_fit
 
@@ -255,7 +255,7 @@ aatd_lda_res <- fit_results(aatd_lda_fit, aatd_reg_rec)
 #' Decision tree classification
 
 # fit model
-aatd_dt_spec %>%
+aatd_dt_mod %>%
   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
   aatd_dt_fit
 
@@ -265,7 +265,7 @@ aatd_dt_res <- fit_results(aatd_dt_fit, aatd_num_rec)
 #' Random forest classification
 
 # fit model
-aatd_rf_spec %>%
+aatd_rf_mod %>%
   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
   aatd_rf_fit
 
@@ -275,7 +275,7 @@ aatd_rf_res <- fit_results(aatd_rf_fit, aatd_num_rec)
 #' Nearest neighbors classification
 
 # fit model
-aatd_nn_spec %>%
+aatd_nn_mod %>%
   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
   aatd_nn_fit
 
@@ -285,7 +285,7 @@ aatd_nn_res <- fit_results(aatd_nn_fit, aatd_num_rec)
 #' Support vector machine classification
 
 # # fit model
-# aatd_svm1_spec %>%
+# aatd_svm1_mod %>%
 #   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
 #   aatd_svm1_fit
 # 
@@ -293,7 +293,7 @@ aatd_nn_res <- fit_results(aatd_nn_fit, aatd_num_rec)
 # aatd_svm1_res <- fit_results(aatd_svm1_fit, aatd_num_rec)
 
 # # fit model
-# aatd_svm2_spec %>%
+# aatd_svm2_mod %>%
 #   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
 #   aatd_svm2_fit
 # 
@@ -301,7 +301,7 @@ aatd_nn_res <- fit_results(aatd_nn_fit, aatd_num_rec)
 # aatd_svm2_res <- fit_results(aatd_svm2_fit, aatd_num_rec)
 
 # # fit model
-# aatd_svm3_spec %>%
+# aatd_svm3_mod %>%
 #   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
 #   aatd_svm3_fit
 # 
