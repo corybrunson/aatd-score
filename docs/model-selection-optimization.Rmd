@@ -1,0 +1,185 @@
+---
+title: "Selection and Optimization of Predictive Models of AAT Genotype"
+author: "Jason Cory Brunson"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(tidymodels)
+library(patchwork)
+theme_set(theme_bw())
+```
+
+This phase of the project aims to complete two goals:
+
+1. Determine the most effective model family to predict AAT genotype from lung and liver medical history.
+2. Identify parameter settings for which this model family achieves the greatest predictive accuracy.
+
+The goal of the next phase will be to define a clinically practical risk score for abnormal AAT genotype based on the optimized model.
+
+# Model selection
+
+We considered several families of predictive model: logistic regression, linear discriminant analysis, random forest, nearest neighbors, and support vector machine using 1-, 2-, and 3-degree polynomial specifications.
+
+```{r model selection results, eval=FALSE}
+# read in model summary data
+aatd_copd_res <- read_rds(here::here("data/aatd-1-copd.rds"))
+aatd_mod_res_count <- read_rds(here::here("data/aatd-1-count.rds"))
+aatd_mod_res_metric <- read_rds(here::here("data/aatd-1-metric.rds"))
+aatd_mod_res_pred <- read_rds(here::here("data/aatd-1-pred.rds"))
+```
+
+
+
+```{r}
+# all ROC plots
+full_join(
+  nest(aatd_mod_res_pred, predictions = c(-predictors, -response)),
+  nest(aatd_copd_res, recommendations = c(-predictors, -response)),
+  by = c("predictors", "response")
+) %>%
+  filter(predictors != "Dx+age") %>%
+  mutate(predictions = map(predictions, ~ group_by(., model))) %>%
+  mutate(recommendations = map(
+    recommendations,
+    ~ mutate(., specificity = 1 - specificity)
+  )) %>%
+  mutate(roc_curve = map(
+    predictions,
+    ~ roc_curve(., truth = geno_class, estimate = .pred_Abnormal)
+  )) %>%
+  mutate(roc_plot = map(roc_curve, autoplot)) %>%
+  mutate(roc_plot = map2(
+    roc_plot, recommendations,
+    ~ .x + geom_point(data = .y, aes(x = specificity, y = sensitivity))
+  )) %>%
+  mutate(title = map2(
+    predictors, response,
+    ~ str_c(.x, "-based screen for ", .y)
+  )) %>%
+  mutate(roc_plot = map2(roc_plot, title, ~ .x + ggtitle(.y))) ->
+  aatd_roc_plots
+# arrange in grid
+aatd_roc_plots %>%
+  pull(roc_plot) %>%
+  wrap_plots(ncol = 3L, nrow = 3L)
+```
+
+# Model optimization
+
+```{r model optimization results}
+# read in evaluation data
+read_rds(here::here("data/aatd-eval.rds")) %>%
+  mutate(across(c(model, predictors, response), fct_inorder)) %>%
+  mutate(.metric = fct_inorder(.metric)) %>%
+  mutate(.metric = fct_recode(
+    .metric,
+    kappa = "kap", `mean log loss` = "mn_log_loss", AUROC = "roc_auc"
+  )) ->
+  aatd_metrics
+```
+
+We considered three model families for the optimization phase: logistic regression, decision tree, and random forest.
+
+We omitted linear discriminant analysis because it closely matched the performance of logistic regression. This is to be expected, since both LDA can be understood as a generalization of logistic regression to more than two classes. Yet LDA is less well-understood by clinical researchers and not commonly used to derive risk scores, so we only include LR in this phase.
+
+We omitted nearest neighbors and support vector machines because they proved extremely time- and memory-intensive to fit. In the case of NN, this was due to limitations of the implementation: Our data comprise binary (and, in some cases, categorical) variables, so that the space of possible records is a hypercube. As a result, only a small number of neighborhoods can be defined around each case, using the Hamming distance defined by the number of variables on which two cases differ, and records are duplicated at high rates. In contrast, most NN implementations rely on the computation of all pairwise distances between cases, which is highly redundant in this setting. Without a weighting scheme on the variables, the NN approach is mismatched, and would require a new implementation to be computationally feasible.
+
+In general, SVMs are less interpretable than LR, decision tree, and even RF and NN models, and thereby less suitable for risk score derivation, but they can be justified when their predictive performance significantly exceeds these approaches. Our preliminary experiments showed no evidence of superior performance---indeed, SVMs performed slightly worse than most other model families---so we omit them from consideration.
+
+## Comparison of model families
+
+By far the strongest determinant of predictive performance was the genotype subclass being predicted: prediction of ZZ alone achieved greatest accuracy (near 99%), prediction of SZ or ZZ was nearly as accurate, and prediction of any abnormal (non-MM) genotype was much more difficult (near 85%).
+This pattern was much noisier, though still detectable, when evaluating performance by AUROC---though by this metric the model family was most determinative (logistic regression outperformed random forest on every task.)
+This may be due not to the task of predicting ZZ genotypes being easier but to the population of ZZ cases being smaller, which can increase the nominal performance of a model by increasing the lower bounds on its sensitivity ... (cite paper)
+Though, since ZZ cases are also the most clinically urgent to detect, we focus on this task when evaluating the optimized models.
+
+### Range of performance across parameter settings
+
+The plot below locates the accuracy and AUROC of each fitted ZZ prediction model over a range of parameter settings for each model family.
+The results are separated by model family, model specification (predictors used), and evaluation measure.
+The logistic regression models varied the penalty parameter while the random forest models varied the number of predictors used in each tree and the number of trees in the forest.
+
+```{r performance across parameters}
+# compare performance of ZZ models across parameter settings
+aatd_metrics %>%
+  filter(response == "ZZ") %>%
+  unnest(hyperparameters) %>%
+  group_by_at(vars(-id, -.estimate)) %>%
+  summarize(mean = mean(.estimate)) %>%
+  filter(.metric == "accuracy" | .metric == "AUROC") %>%
+  mutate(predictors = fct_rev(predictors)) %>%
+  ggplot(aes(x = mean, y = predictors)) +
+  facet_grid(model ~ .metric, scales = "free_x") +
+  geom_jitter(width = 0, height = 1/4, alpha = .5) +
+  labs(x = "Performance", y = "Predictors") +
+  ggtitle("Accuracy of predictive models of ZZ genotype")
+```
+
+Measured by overall accuracy, LR models showed more consistency across parameter settings, but some RF models achieved greater ultimate performance.
+On the more important measure of AUROC, however, LR models universally outperformed RF models.
+Among the LR models, the inclusion of gender did not improve performance by either measure, but the inclusion of smoking history led to consistent, though not highly significant, improvement (a less than 0.01% increase in accuracy and a less than 5% increase in AUROC).
+
+### Optimized parameter settings
+
+```{r optimal parameters}
+# best parameter settings for each model and formula by two measures
+aatd_metrics %>%
+  filter(response == "ZZ") %>%
+  filter(.metric == "accuracy" | .metric == "AUROC") %>%
+  group_by_at(vars(-id, -.estimate)) %>%
+  summarize(mean = mean(.estimate), sd = sd(.estimate), .groups = "drop") %>%
+  group_by(model, predictors, response, .metric) %>%
+  filter(mean == max(mean)) %>%
+  unnest(hyperparameters) %>%
+  mutate(param_pref = rank(ifelse(is.na(penalty), desc(trees), penalty))) %>%
+  filter(param_pref == min(param_pref)) %>%
+  ungroup() ->
+  aatd_opt
+```
+
+Below we inspect the settings in each model that achieved the greatest performance, by overall accuracy and by the area under the receiver operating characteristic curve (AUROC):
+
+```{r optimal performance table}
+aatd_opt %>%
+  mutate(
+    penalty = ifelse(
+      is.na(penalty), NA_character_,
+      str_replace(format(penalty, scientific = TRUE), "e", " × 10^")
+    ),
+    mtry = as.character(mtry), trees = as.character(trees)
+  ) %>%
+  mutate(across(c(penalty, mtry, trees), ~ ifelse(is.na(.), "&ndash;", .))) %>%
+  mutate(mean = format(round(mean, digits = 3L), digits = 3L, nsmall = 1L)) %>%
+  select(
+    Measure = .metric, Model = model, Predictors = predictors,
+    penalty, mtry, trees,
+    `Mean performance` = mean
+  ) %>%
+  arrange(Measure, Model, Predictors) %>%
+  knitr::kable()
+```
+
+The high accuracy rates are largely artifacts of the imbalance in the data; the ROC curves provide a more discriminating measure of performance. These are used below to visually compare performance between the model families and specifications.
+Remember that performance in each setting is an average taken over 6-fold cross-validation, from which we derive compatibility intervals.
+
+```{r optimal performance plot, fig.height=4}
+aatd_opt %>%
+  filter(.metric == "AUROC") %>%
+  mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
+  mutate(formula = fct_rev(formula)) %>%
+  ggplot(aes(x = mean, xmin = mean - 2*sd, xmax = mean + 2*sd, y = formula)) +
+  facet_grid(model ~ .) +
+  geom_pointrange() +
+  labs(x = "AUROC", y = NULL)
+```
+
+Logistic regression clearly provides greater performance in this setting.
+
+## Selection of optimized model
+
+A remaining question is whether the inclusion of smoking history provides detectable improvement in the model.
+We could perform a likelihood ratio test of the null hypothesis that the model with smoking history outperforms the model without, or use the Akaike Information Criterion to quantify the trade-off between predictive performance and model complexity.

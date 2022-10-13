@@ -26,6 +26,19 @@ aatd_metrics %>%
   labs(x = "Accuracy", y = "Predictors -> Response")
 # choice of response is determinative; need to compare models of same response
 
+# compare AUROC across hyperparameter settings
+aatd_metrics %>%
+  unnest(hyperparameters) %>%
+  group_by_at(vars(-id, -.estimate)) %>%
+  summarize(mean = mean(.estimate), .groups = "drop") %>%
+  filter(.metric == "roc_auc") %>%
+  mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
+  mutate(formula = fct_rev(formula)) %>%
+  ggplot(aes(x = mean, y = formula)) +
+  facet_grid(model ~ .) +
+  geom_boxplot() +
+  labs(x = "AUROC", y = "Predictors -> Response")
+
 # compare accuracy across hyperparameter settings: ZZ (greatest accuracy)
 aatd_metrics %>%
   filter(response == "ZZ") %>%
