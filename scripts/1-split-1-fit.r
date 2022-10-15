@@ -133,6 +133,22 @@ ii <- if (file.exists(here::here("data/aatd-1-split-ii.rds"))) {
   c(0L, 0L)
 }
 
+#' Load data
+
+# load data and subset to a fixed stratified sample for all experiments
+set.seed(0L)
+read_rds(here::here("data/aatd-pred.rds")) %>%
+  inner_join(read_rds(here::here("data/aatd-resp.rds")), by = "record_id") %>%
+  mutate(stratum = case_when(
+    genotype == "SZ" | genotype == "ZZ" | genotype == "MM" ~ genotype,
+    TRUE ~ "Ab"
+  )) %>%
+  group_by(stratum) %>%
+  slice_sample(prop = p_data) %>%
+  ungroup() %>%
+  select(record_id) ->
+  aatd_subset
+
 for (i_pred in seq_along(vars_predictors)) {#LOOP
 for (i_resp in seq_along(vars_response)) {#LOOP
 
@@ -148,11 +164,12 @@ print("--------------------------------")
 
 #' Pre-process data
 
-# load and subset predictors data
+# load predictors data
 read_rds(here::here("data/aatd-pred.rds")) %>%
-  sample_frac(size = p_data) %>%
   # choice of predictors
-  select(record_id, eval(vars_predictors[[i_pred]])) ->
+  select(record_id, eval(vars_predictors[[i_pred]])) %>%
+  # subset
+  semi_join(aatd_subset, by = "record_id") ->
   aatd_data
 
 # join in responses
@@ -206,7 +223,15 @@ aatd_split <- initial_split(aatd_data, prop = n_train, strata = geno_class)
 recipe(training(aatd_split), geno_class ~ .) %>%
   # stop treating the ID as a predictor
   #update_role(record_id, new_role = "id variable") %>%
-  step_rm(record_id, genotype, ends_with("_none")) %>%
+  step_rm(record_id, genotype) %>%
+  # remove redundant lung & liver categories
+  step_rm(ends_with("_none")) %>%
+  # remove any variables that are constant within classes (zero variance)
+  step_zv(all_predictors()) %>%
+  # one-hot encoding of factors
+  step_dummy(all_nominal_predictors(), one_hot = FALSE) %>%
+  # binary encoding of logicals
+  step_mutate_at(has_type(match = "logical"), fn = as.integer) %>%
   prep() ->
   aatd_reg_rec
 
@@ -284,29 +309,29 @@ aatd_nn_res <- fit_results(aatd_nn_fit, aatd_num_rec)
 
 #' Support vector machine classification
 
-# # fit model
-# aatd_svm1_mod %>%
-#   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
-#   aatd_svm1_fit
-# 
-# # evaluate model
-# aatd_svm1_res <- fit_results(aatd_svm1_fit, aatd_num_rec)
+# fit model
+aatd_svm1_mod %>%
+  fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
+  aatd_svm1_fit
 
-# # fit model
-# aatd_svm2_mod %>%
-#   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
-#   aatd_svm2_fit
-# 
-# # evaluate model
-# aatd_svm2_res <- fit_results(aatd_svm2_fit, aatd_num_rec)
+# evaluate model
+aatd_svm1_res <- fit_results(aatd_svm1_fit, aatd_num_rec)
 
-# # fit model
-# aatd_svm3_mod %>%
-#   fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
-#   aatd_svm3_fit
-# 
-# # evaluate model
-# aatd_svm3_res <- fit_results(aatd_svm3_fit, aatd_num_rec)
+# fit model
+aatd_svm2_mod %>%
+  fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
+  aatd_svm2_fit
+
+# evaluate model
+aatd_svm2_res <- fit_results(aatd_svm2_fit, aatd_num_rec)
+
+# fit model
+aatd_svm3_mod %>%
+  fit(geno_class ~ ., bake(aatd_num_rec, NULL)) ->
+  aatd_svm3_fit
+
+# evaluate model
+aatd_svm3_res <- fit_results(aatd_svm3_fit, aatd_num_rec)
 
 #' Comparison of models
 
@@ -317,9 +342,9 @@ list(
   , `decision tree` = aatd_dt_res
   , `random forest` = aatd_rf_res
   , `nearest neighbor` = aatd_nn_res
-  # , `linear svm` = aatd_svm1_res
-  # , `quadratic svm` = aatd_svm2_res
-  # , `cubic svm` = aatd_svm3_res
+  , `linear svm` = aatd_svm1_res
+  , `quadratic svm` = aatd_svm2_res
+  , `cubic svm` = aatd_svm3_res
 ) %>%
   map(count, .pred_class, geno_class, name = "count") %>%
   enframe(name = "model", value = "count") %>%
@@ -338,9 +363,9 @@ list(
   , `decision tree` = aatd_dt_res
   , `random forest` = aatd_rf_res
   , `nearest neighbor` = aatd_nn_res
-  # , `linear svm` = aatd_svm1_res
-  # , `quadratic svm` = aatd_svm2_res
-  # , `cubic svm` = aatd_svm3_res
+  , `linear svm` = aatd_svm1_res
+  , `quadratic svm` = aatd_svm2_res
+  , `cubic svm` = aatd_svm3_res
 ) %>%
   map(metrics, truth = geno_class, estimate = .pred_class, .pred_Abnormal) %>%
   enframe(name = "model", value = "metrics") %>%
@@ -359,9 +384,9 @@ list(
   , `decision tree` = aatd_dt_res
   , `random forest` = aatd_rf_res
   , `nearest neighbor` = aatd_nn_res
-  # , `linear svm` = aatd_svm1_res
-  # , `quadratic svm` = aatd_svm2_res
-  # , `cubic svm` = aatd_svm3_res
+  , `linear svm` = aatd_svm1_res
+  , `quadratic svm` = aatd_svm2_res
+  , `cubic svm` = aatd_svm3_res
 ) %>%
   enframe(name = "model", value = "results") %>%
   mutate(model = fct_inorder(model), predictors = pred, response = resp) %>%

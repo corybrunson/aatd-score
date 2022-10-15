@@ -175,7 +175,11 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
 recipe(aatd_data, geno_class ~ .) %>%
   # stop treating the ID as a predictor
   #update_role(record_id, new_role = "id variable") %>%
-  step_rm(record_id, genotype, ends_with("_none")) %>%
+  step_rm(record_id, genotype) %>%
+  # remove redundant lung & liver categories
+  step_rm(ends_with("_none")) %>%
+  # remove any variables that are constant within classes (zero variance)
+  step_zv(all_predictors()) %>%
   # one-hot encoding of factors
   step_dummy(all_nominal_predictors(), one_hot = FALSE) %>%
   # binary encoding of logicals

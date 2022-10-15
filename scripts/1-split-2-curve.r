@@ -19,14 +19,12 @@ aatd_mod_res_pred %>%
   select(-response, -predictors) %>%
   group_by(model) %>%
   roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
-  autoplot() +
-  # account for silliness of autoplot
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  coord_equal() +
+  geom_path(aes(color = model)) +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
   geom_point(
-    data = mutate(
-      filter(aatd_copd_res, response == resp, predictors == pred),
-      specificity = 1 - specificity
-    ),
-    aes(x = specificity, y = sensitivity)
+    data = filter(aatd_copd_res, response == resp, predictors == pred)
   ) +
   ggtitle(str_c(pred, "-based screen for ", resp)) ->
   aatd_roc
@@ -41,13 +39,15 @@ aatd_mod_res_pred %>%
   select(-response, -predictors) %>%
   group_by(model) %>%
   pr_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
-  autoplot() +
+  ggplot(aes(x = recall, y = precision)) +
+  coord_equal() +
+  geom_path(aes(color = model)) +
   geom_point(
-    data = filter(aatd_copd_res, response == resp, predictors == pred),
-    aes(x = recall, y = precision)
+    data = filter(aatd_copd_res, response == resp, predictors == pred)
   ) +
-  scale_x_continuous(trans = "log") + scale_y_continuous(trans = "log") +
-  lims(x = c(0, 1), y = c(0, 1)) + coord_equal() +
+  # lims(x = c(0, 1), y = c(0, 1)) +
+  scale_x_continuous(trans = "log", breaks = breaks_log(base = 10)) +
+  scale_y_continuous(trans = "log", breaks = breaks_log(base = 10)) +
   ggtitle(str_c(pred, "-based screen for ", resp)) ->
   aatd_pr
 ggsave(
