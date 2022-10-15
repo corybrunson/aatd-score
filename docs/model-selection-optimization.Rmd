@@ -6,10 +6,10 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.width = 8)
 library(tidyverse)
 library(tidymodels)
-library(patchwork)
 theme_set(theme_bw())
 ```
 
@@ -22,51 +22,100 @@ The goal of the next phase will be to define a clinically practical risk score f
 
 # Model selection
 
-We considered several families of predictive model: logistic regression, linear discriminant analysis, random forest, nearest neighbors, and support vector machine using 1-, 2-, and 3-degree polynomial specifications.
+We considered several families of predictive model: logistic regression (LR), linear discriminant analysis (LDA), random forest (RF), nearest neighbors (NN), and support vector machine (SVM) using 1-, 2-, and 3-degree polynomial specifications.^[Results from SVMs need to be re-generated, which will take some time.]
+We will compare these models over a $3 \times 3$ grid of prediction tasks given by each combination of predictors (lung/liver medical history only, together with gender, and together with smoking history) and of response (ZZ, SZ/ZZ, or any non-MM).
 
-```{r model selection results, eval=FALSE}
+```{r model selection results}
 # read in model summary data
-aatd_copd_res <- read_rds(here::here("data/aatd-1-copd.rds"))
-aatd_mod_res_count <- read_rds(here::here("data/aatd-1-count.rds"))
-aatd_mod_res_metric <- read_rds(here::here("data/aatd-1-metric.rds"))
-aatd_mod_res_pred <- read_rds(here::here("data/aatd-1-pred.rds"))
-```
-
-
-
-```{r}
-# all ROC plots
-full_join(
-  nest(aatd_mod_res_pred, predictions = c(-predictors, -response)),
-  nest(aatd_copd_res, recommendations = c(-predictors, -response)),
-  by = c("predictors", "response")
-) %>%
+read_rds(here::here("data/aatd-1-copd.rds")) %>%
   filter(predictors != "Dx+age") %>%
-  mutate(predictions = map(predictions, ~ group_by(., model))) %>%
-  mutate(recommendations = map(
-    recommendations,
-    ~ mutate(., specificity = 1 - specificity)
-  )) %>%
-  mutate(roc_curve = map(
-    predictions,
-    ~ roc_curve(., truth = geno_class, estimate = .pred_Abnormal)
-  )) %>%
-  mutate(roc_plot = map(roc_curve, autoplot)) %>%
-  mutate(roc_plot = map2(
-    roc_plot, recommendations,
-    ~ .x + geom_point(data = .y, aes(x = specificity, y = sensitivity))
-  )) %>%
-  mutate(title = map2(
-    predictors, response,
-    ~ str_c(.x, "-based screen for ", .y)
-  )) %>%
-  mutate(roc_plot = map2(roc_plot, title, ~ .x + ggtitle(.y))) ->
-  aatd_roc_plots
-# arrange in grid
-aatd_roc_plots %>%
-  pull(roc_plot) %>%
-  wrap_plots(ncol = 3L, nrow = 3L)
+  mutate(across(c(predictors, response), fct_inorder)) ->
+  aatd_copd_res
+read_rds(here::here("data/aatd-1-count.rds")) %>%
+  filter(predictors != "Dx+age") %>%
+  mutate(across(c(predictors, response), fct_inorder)) ->
+  aatd_mod_res_count
+read_rds(here::here("data/aatd-1-metric.rds")) %>%
+  filter(predictors != "Dx+age") %>%
+  mutate(across(c(predictors, response), fct_inorder)) ->
+  aatd_mod_res_metric
+read_rds(here::here("data/aatd-1-pred.rds")) %>%
+  filter(predictors != "Dx+age") %>%
+  mutate(across(c(predictors, response), fct_inorder)) ->
+  aatd_mod_res_pred
 ```
+
+## Performance curves
+
+These are all binary classification problems, such that our probabilistic models can be used to define a sliding scale of screening thresholds based on different prescriptive trade-offs between the false negative and false positive rates.
+As such, we primarily use performance curves to compare them.
+The response variables are highly imbalanced, due to the rarity of abnormal genotypes.
+We therefore take advantage of two popular performance curves: The receiver operator characteristic (ROC) and precision--recall (PR) curves.
+These have complementary strengths and may reveal different trade-offs between the data (Davis & Goadrich, 2006).
+
+These models are being designed as candidate substitutes for the current recommendation that patients be screened for an abnormal alpha-1 genotype if (and only if) they have been diagnosed with chronic obstructive pulmonary disease (COPD).
+In addition to the models' performance curves, we also include a marker at the sensitivity and specificity of this recommendation for each combination of predictors response.
+(The recommendation is not directly affected by the choice of predictors, but the data may differ slightly as the use of a new predictor forces us to discard cases for which its value is missing, which will slightly change the _measured_ sensitivity and specificity of the recommendation.)
+
+### Receiver operator curves
+
+```{r roc plots, fig.height=8}
+aatd_mod_res_pred %>%
+  group_by(model, predictors, response) %>%
+  roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ungroup() %>%
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  coord_equal() +
+  geom_path(aes(color = model)) +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
+  geom_point(data = aatd_copd_res) +
+  scale_x_continuous(labels = scales::label_percent()) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  theme(legend.position = "bottom")
+```
+
+The ROC curves show LR and LDA to perform very similarly. This is to be expected, since LDA can be understood as a generalization of LR to more than two classes.
+NN models perform much less well, though still consistently better than RF models, which are not visibly different from random screening.
+The ROC curves suggest that ZZ and, less so, SZ/ZZ genotypes are significantly easier to predict than arbitrary abnormal genotypes, and they demonstrate a modest benefit to including smoking history in most models but an uncertain benefit to including gender.
+As evaluated on our data, the standard recommendation underperforms random screening for SZ/ZZ and for arbitrary abnormal genotype, though it does provide a slight benefit in screening for ZZ.
+
+It is generally understood that sensitivity is more valuable than specificity in this context: The potential cost of missing an abnormal AAT genotype is much higher than that of an unnecessary screen.
+Our primary focus, then, is the top half-space of each ROC plot.
+Troublingly, COPD-based screening shows lower sensitivity than random screening for all three abnormal genotype sets, though only slightly in the case of ZZ.
+The NN and RF models show little difference from random screening toward the top-left corner of each plot, and the LR and LDA models show much clearer improvement with the addition of gender or smoking history as predictors and only minor (< 5%) improvement without.
+
+The greatest gain in sensitivity obtains at about 50% specificity, which makes for a useful comparison to the COPD-based recommendation.
+For ZZ prediction, the LR and LDA models obtain between 15% and 18% improvement over COPD-based screening in sensitivity subject to fixed specificity.^[These comparisons can be calculated exactly if needed.]
+
+### Precision--recall curves
+
+Whereas recall is equivalent to sensitivity (true positive rate, the rate at which true cases test positive), precision is not the true negative rate (specificity) but the rate at which positive tests yield true cases (the positive predictive value, and the complement of the false discovery rate: $\text{PPV} = 1 - \text{FDR}$).
+Precision--recall curves therefore map the cost, in decreased value of tests (upward along the ordinate), of increasing the detection of cases (rightward along the abscissa).
+In the plots below, note that both recall and precision lie along log-transformed axes.
+
+```{r pr plots, fig.height=5}
+aatd_mod_res_pred %>%
+  group_by(model, predictors, response) %>%
+  pr_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ggplot(aes(x = recall, y = precision)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  coord_equal() +
+  geom_path(aes(color = model)) +
+  geom_point(data = filter(aatd_copd_res, predictors != "Dx+age")) +
+  # lims(x = c(0, 1), y = c(0, 1)) +
+  scale_x_continuous(trans = "log", breaks = breaks_log(base = 10),
+                     labels = scales::label_percent()) +
+  scale_y_continuous(trans = "log", breaks = breaks_log(base = 10),
+                     labels = scales::label_percent()) +
+  theme(legend.position = "bottom")
+```
+
+The model families are not as clearly distinguishable in terms of precision and recall. Though the superiority of LR and LDA is revealed as the curves surpass 1% recall: the NN curves fall consistently below, and the RF curves only appear to lie above them due to linear interpolation between measured values, which is inappropriate both for PR curves generally and for log--log plots.
+When predicting ZZ, all curves attain peak precision at around 1% recall, decline precipitously in precision to between 3% and 10% recall, then more gradually lose precision as recall approaches 100%. (The pattern is similar for predicting SZ/ZZ.)
+These differences are marginal, however---as can be seen when the PR curves are plotted on untransformed axes, all of these models perform quite poorly.
+
+Taken together, the ROC and PR curves favor logistic regression (and linear discriminant analysis) as candidate bases for a new risk score.
 
 # Model optimization
 
@@ -82,9 +131,9 @@ read_rds(here::here("data/aatd-eval.rds")) %>%
   aatd_metrics
 ```
 
-We considered three model families for the optimization phase: logistic regression, decision tree, and random forest.
+We considered three model families for the optimization phase: logistic regression, decision tree, and random forest.^[Decision tree models can be included after they are incorporated into the model selection phase.]
 
-We omitted linear discriminant analysis because it closely matched the performance of logistic regression. This is to be expected, since both LDA can be understood as a generalization of logistic regression to more than two classes. Yet LDA is less well-understood by clinical researchers and not commonly used to derive risk scores, so we only include LR in this phase.
+We omitted linear discriminant analysis from this phase because it closely matched the performance of logistic regression, and because it is less well-understood by clinical researchers and not commonly used to derive risk scores.
 
 We omitted nearest neighbors and support vector machines because they proved extremely time- and memory-intensive to fit. In the case of NN, this was due to limitations of the implementation: Our data comprise binary (and, in some cases, categorical) variables, so that the space of possible records is a hypercube. As a result, only a small number of neighborhoods can be defined around each case, using the Hamming distance defined by the number of variables on which two cases differ, and records are duplicated at high rates. In contrast, most NN implementations rely on the computation of all pairwise distances between cases, which is highly redundant in this setting. Without a weighting scheme on the variables, the NN approach is mismatched, and would require a new implementation to be computationally feasible.
 
@@ -141,7 +190,7 @@ aatd_metrics %>%
   aatd_opt
 ```
 
-Below we inspect the settings in each model that achieved the greatest performance, by overall accuracy and by the area under the receiver operating characteristic curve (AUROC):
+Below we inspect the settings in each model that achieved the greatest performance, by overall accuracy and by the area under the receiver operator characteristic curve (AUROC):
 
 ```{r optimal performance table}
 aatd_opt %>%
