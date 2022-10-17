@@ -22,8 +22,8 @@ library(discrim)
 library(tidymodels)
 
 # hyperparameters
-p_data <- 1/10
-# p_data <- 1/6
+# p_data <- 1/10
+p_data <- 1/6
 # p_data <- 1
 n_train <- 2/3
 

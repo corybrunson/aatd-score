@@ -11,6 +11,7 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
 library(tidyverse)
 library(tidymodels)
 theme_set(theme_bw())
+sample_denom <- "6"
 ```
 
 This phase of the project aims to complete two goals:
@@ -20,30 +21,46 @@ This phase of the project aims to complete two goals:
 
 The goal of the next phase will be to define a clinically practical risk score for abnormal AAT genotype based on the optimized model.
 
-# Model selection
+# Phase 1: Model selection
 
-We considered several families of predictive model: logistic regression (LR), linear discriminant analysis (LDA), random forest (RF), nearest neighbors (NN), and support vector machine (SVM) using 1-, 2-, and 3-degree polynomial specifications.^[Results from SVMs need to be re-generated, which will take some time.]
+We considered several families of predictive model: logistic regression (LR), linear discriminant analysis (LDA), decision tree (DT), random forest (RF), nearest neighbors (NN), and support vector machine (SVM) using 1-, 2-, and 3-degree polynomial specifications.
 We will compare these models over a $3 \times 3$ grid of prediction tasks given by each combination of predictors (lung/liver medical history only, together with gender, and together with smoking history) and of response (ZZ, SZ/ZZ, or any non-MM).
 
 ```{r model selection results}
 # read in model summary data
-read_rds(here::here("data/aatd-1-copd.rds")) %>%
+read_rds(here::here(str_c("data/aatd-1-copd-", sample_denom, ".rds"))) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_copd_res
-read_rds(here::here("data/aatd-1-count.rds")) %>%
+read_rds(here::here(str_c("data/aatd-1-count-", sample_denom, ".rds"))) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_count
-read_rds(here::here("data/aatd-1-metric.rds")) %>%
+read_rds(here::here(str_c("data/aatd-1-metric-", sample_denom, ".rds"))) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_metric
-read_rds(here::here("data/aatd-1-pred.rds")) %>%
+read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_pred
+# model family groups
+read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
+  distinct(model) %>%
+  mutate(type = case_when(
+    model == "logistic regression" | model == "linear discriminant" ~
+      "generalized linear",
+    model == "decision tree" | model == "random forest" ~ "tree-based",
+    model == "nearest neighbor" ~ "distance-based",
+    str_detect(model, "svm") ~ "kernel-based"
+  )) %>%
+  mutate(type == fct_inorder(type)) ->
+  model_types
 ```
+
+For this phase, models were evaluated using a fixed sample of $\frac{1}{`r sample_denom`}$ of the data.
+The sample was stratified by a 4-way categorization of genotypes: ZZ, SZ, other non-MM, and MM. This was done in order to prevent significant changes in the balance of response values in each model.
+Models were fit on a \frac{2}{3} training set of this sample and evaluated on the remaining \frac{1}{3} testing set. This partition was also stratified by genotype and fixed across all evaluations.
 
 ## Performance curves
 
@@ -72,11 +89,14 @@ aatd_mod_res_pred %>%
   geom_point(data = aatd_copd_res) +
   scale_x_continuous(labels = scales::label_percent()) +
   scale_y_continuous(labels = scales::label_percent()) +
+  scale_color_brewer(type = "qual") +
   theme(legend.position = "bottom")
 ```
 
-The ROC curves show LR and LDA to perform very similarly. This is to be expected, since LDA can be understood as a generalization of LR to more than two classes.
-NN models perform much less well, though still consistently better than RF models, which are not visibly different from random screening.
+The ROC curves show LR and LDA to perform very similarly. This is to be expected, since LDA can be understood as a generalization of LR to more than two classes (though they are not equivalent in the two-class case).
+NN models perform much less well, though still consistently better than DT and RF models, which are not visibly different from random screening.
+In some cases, SVM models outperform DT and RF and are competitive with LR and LDA, but in many others they perform worse than random screening.
+
 The ROC curves suggest that ZZ and, less so, SZ/ZZ genotypes are significantly easier to predict than arbitrary abnormal genotypes, and they demonstrate a modest benefit to including smoking history in most models but an uncertain benefit to including gender.
 As evaluated on our data, the standard recommendation underperforms random screening for SZ/ZZ and for arbitrary abnormal genotype, though it does provide a slight benefit in screening for ZZ.
 
@@ -84,9 +104,87 @@ It is generally understood that sensitivity is more valuable than specificity in
 Our primary focus, then, is the top half-space of each ROC plot.
 Troublingly, COPD-based screening shows lower sensitivity than random screening for all three abnormal genotype sets, though only slightly in the case of ZZ.
 The NN and RF models show little difference from random screening toward the top-left corner of each plot, and the LR and LDA models show much clearer improvement with the addition of gender or smoking history as predictors and only minor (< 5%) improvement without.
+The SVM models remain poor and inconsistent predictors when restricted to the high-sensitivity region.
 
-The greatest gain in sensitivity obtains at about 50% specificity, which makes for a useful comparison to the COPD-based recommendation.
-For ZZ prediction, the LR and LDA models obtain between 15% and 18% improvement over COPD-based screening in sensitivity subject to fixed specificity.^[These comparisons can be calculated exactly if needed.]
+The table and plot below summarize the sensitivity gains of all model families relative to random screening and to COPD-based screening, respectively.
+
+```{r sensitivity gain, fig.height=6}
+# improvement relative to random screening
+aatd_mod_res_pred %>%
+  group_by(model, predictors, response) %>%
+  roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ungroup() %>%
+  mutate(sensitivity_gain = sensitivity - 1 + specificity) %>%
+  left_join(model_types, by = "model") %>%
+  filter(response == "ZZ") %>%
+  group_by(model, predictors) %>%
+  filter(sensitivity_gain == max(sensitivity_gain)) %>%
+  group_by(model) %>%
+  filter(sensitivity_gain == min(sensitivity_gain) |
+           sensitivity_gain == max(sensitivity_gain)) %>%
+  mutate(bound = ifelse(
+    sensitivity_gain == min(sensitivity_gain),
+    "Minimum", "Maximum"
+  )) %>%
+  group_by(model, sensitivity_gain) %>%
+  filter(.threshold == max(.threshold)) %>%
+  slice_head(n = 1L) %>%
+  ungroup() %>%
+  mutate(bound = factor(bound, levels = c("Minimum", "Maximum"))) %>%
+  select(
+    Model = model,
+    bound, `sensitivity gain` = sensitivity_gain
+  ) %>%
+  pivot_wider(names_from = bound, names_glue = "{bound} {.value}",
+              values_from = `sensitivity gain`, names_sort = TRUE) %>%
+  mutate(across(
+    where(is.double),
+    ~ str_c(format(round(., digits = 3L) * 100, nsmall = 1L, trim = TRUE), "%")
+  )) %>%
+  set_names(c(
+    "Model",
+    "Least peak sensitivity gain (ZZ)", "Greatest peak sensitivity gain (ZZ)"
+  )) %>%
+  knitr::kable(align = "lrr")
+# improvement relative to COPD-based screening
+aatd_mod_res_pred %>%
+  left_join(model_types, by = "model") %>%
+  filter(type == "generalized linear" & response == "ZZ") %>%
+  group_by(model, predictors, response) %>%
+  roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ungroup() %>%
+  rename_with(~ str_c("model_", .), c(sensitivity, specificity)) %>%
+  left_join(aatd_copd_res, by = c("predictors", "response")) %>%
+  rename_with(~ str_c("copd_", .), c(sensitivity, specificity)) %>%
+  # sensitivity gain relative to COPD at minimum higher specificity
+  mutate(
+    model_copd_dist = abs(model_specificity - copd_specificity),
+    model_copd_sign = sign(model_specificity - copd_specificity)
+  ) %>%
+  group_by(model, predictors, response, model_copd_sign) %>%
+  filter(model_copd_dist == min(model_copd_dist)) %>%
+  ungroup() %>%
+  transmute(
+    model, predictors, response, .threshold,
+    specificity_diff = model_specificity - copd_specificity,
+    sensitivity_diff = model_sensitivity - copd_sensitivity
+  ) %>%
+  unite("specification", predictors, response, sep = " -> ") %>%
+  ggplot(aes(x = specificity_diff, y = sensitivity_diff,
+             shape = model, color = specification)) +
+  coord_equal() +
+  geom_point() +
+  geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
+  scale_x_continuous(labels = scales::label_percent()) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  scale_color_brewer(type = "qual") +
+  labs(x = "Change in specificity", y = "Change in sensitivity") +
+  theme(legend.position = "right")
+```
+
+The greatest improvements in ZZ prediction over random screening are limited to the LR and LDA models and range from 17 to 20 percentage points.
+These obtain near 50% specificity, which makes for useful comparisons against COPD-based screening.
+For ZZ prediction (see the plot above), the LR and LDA models obtain between 15 and 21 percentage point improvement over COPD-based screening in sensitivity subject to a specificity loss of less than 5 percentage points.
 
 ### Precision--recall curves
 
@@ -94,7 +192,7 @@ Whereas recall is equivalent to sensitivity (true positive rate, the rate at whi
 Precision--recall curves therefore map the cost, in decreased value of tests (upward along the ordinate), of increasing the detection of cases (rightward along the abscissa).
 In the plots below, note that both recall and precision lie along log-transformed axes.
 
-```{r pr plots, fig.height=5}
+```{r pr plots, fig.height=6}
 aatd_mod_res_pred %>%
   group_by(model, predictors, response) %>%
   pr_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
@@ -103,21 +201,23 @@ aatd_mod_res_pred %>%
   coord_equal() +
   geom_path(aes(color = model)) +
   geom_point(data = filter(aatd_copd_res, predictors != "Dx+age")) +
-  # lims(x = c(0, 1), y = c(0, 1)) +
-  scale_x_continuous(trans = "log", breaks = breaks_log(base = 10),
-                     labels = scales::label_percent()) +
-  scale_y_continuous(trans = "log", breaks = breaks_log(base = 10),
-                     labels = scales::label_percent()) +
+  lims(x = c(0, 1), y = c(0, 1)) +
+  # scale_x_continuous(trans = "log", breaks = breaks_log(base = 10),
+  #                    labels = scales::label_percent()) +
+  # scale_y_continuous(trans = "log", breaks = breaks_log(base = 10),
+  #                    labels = scales::label_percent()) +
+  scale_color_brewer(type = "qual") +
   theme(legend.position = "bottom")
 ```
 
-The model families are not as clearly distinguishable in terms of precision and recall. Though the superiority of LR and LDA is revealed as the curves surpass 1% recall: the NN curves fall consistently below, and the RF curves only appear to lie above them due to linear interpolation between measured values, which is inappropriate both for PR curves generally and for log--log plots.
-When predicting ZZ, all curves attain peak precision at around 1% recall, decline precipitously in precision to between 3% and 10% recall, then more gradually lose precision as recall approaches 100%. (The pattern is similar for predicting SZ/ZZ.)
+The model families are not as clearly distinguishable in terms of precision and recall.
+The superiority of LR and LDA is discernible as the curves surpass 1% recall: the NN curves fall consistently below, and the DT and RF curves only appear to lie above them due to linear interpolation between measured values, which is inappropriate both for PR curves generally and for log--log plots.
+When predicting ZZ, all curves attain peak precision between 1% and 10% recall and decline in precision as recall approaches 100%. (The pattern is similar for predicting SZ/ZZ.)
 These differences are marginal, however---as can be seen when the PR curves are plotted on untransformed axes, all of these models perform quite poorly.
 
 Taken together, the ROC and PR curves favor logistic regression (and linear discriminant analysis) as candidate bases for a new risk score.
 
-# Model optimization
+# Phase 2: Model optimization
 
 ```{r model optimization results}
 # read in evaluation data
@@ -131,9 +231,9 @@ read_rds(here::here("data/aatd-eval.rds")) %>%
   aatd_metrics
 ```
 
-We considered three model families for the optimization phase: logistic regression, decision tree, and random forest.^[Decision tree models can be included after they are incorporated into the model selection phase.]
-
+We considered two model families for the optimization phase: logistic regression and random forest.
 We omitted linear discriminant analysis from this phase because it closely matched the performance of logistic regression, and because it is less well-understood by clinical researchers and not commonly used to derive risk scores.
+We omitted decision trees because they showed no benefit in any of the experiments in Phase 1.
 
 We omitted nearest neighbors and support vector machines because they proved extremely time- and memory-intensive to fit. In the case of NN, this was due to limitations of the implementation: Our data comprise binary (and, in some cases, categorical) variables, so that the space of possible records is a hypercube. As a result, only a small number of neighborhoods can be defined around each case, using the Hamming distance defined by the number of variables on which two cases differ, and records are duplicated at high rates. In contrast, most NN implementations rely on the computation of all pairwise distances between cases, which is highly redundant in this setting. Without a weighting scheme on the variables, the NN approach is mismatched, and would require a new implementation to be computationally feasible.
 
@@ -209,7 +309,7 @@ aatd_opt %>%
     `Mean performance` = mean
   ) %>%
   arrange(Measure, Model, Predictors) %>%
-  knitr::kable()
+  knitr::kable(align = "lllrrrr")
 ```
 
 The high accuracy rates are largely artifacts of the imbalance in the data; the ROC curves provide a more discriminating measure of performance. These are used below to visually compare performance between the model families and specifications.
