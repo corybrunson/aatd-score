@@ -241,6 +241,12 @@ In general, SVMs are less interpretable than LR, decision tree, and even RF and 
 
 ## Comparison of model families
 
+Across the same sets of predictors and responses as in Phase 1, we evaluated LR and RF models using 6-fold cross validation on the entire data set:
+For each 5--1 split of a 6-fold partition, models were _trained_ and _tuned_ on the $\frac{5}{6}$ part by identifying the parameter settings that obtained the best fit, then _tested_ on the remaining $\frac{1}{6}$.
+Logistic regression models were tuned over 6 values of the penalty parameter ($10 ^ {-10}$ through $10 ^ 0$ with exponents at increments of $2$), which controls the cost of each additional predictor in the pruned model.
+Random forest models were tuned over 10 parameter settings: each combination of 5 numbers of trees ($1$ through $100$ at rounded powers of $\sqrt{10}$) and 2 numbers of predictors per tree ($p ^ {1/3} \approx 3$ and $\sqrt{p} \approx 4$, where $p$ is the total number of predictors).
+We focused on two performance measures: overall accuracy and AUROC.
+
 By far the strongest determinant of predictive performance was the genotype subclass being predicted: prediction of ZZ alone achieved greatest accuracy (near 99%), prediction of SZ or ZZ was nearly as accurate, and prediction of any abnormal (non-MM) genotype was much more difficult (near 85%).
 This pattern was much noisier, though still detectable, when evaluating performance by AUROC---though by this metric the model family was most determinative (logistic regression outperformed random forest on every task.)
 This may be due not to the task of predicting ZZ genotypes being easier but to the population of ZZ cases being smaller, which can increase the nominal performance of a model by increasing the lower bounds on its sensitivity ... (cite paper)
