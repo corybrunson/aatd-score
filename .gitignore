@@ -9,4 +9,6 @@ data-raw/
 ref/
 data/
 fig/
-
+/**/*.html
+/**/*.pdf
+/**/*.jpg
