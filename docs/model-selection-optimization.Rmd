@@ -23,7 +23,7 @@ The goal of the next phase will be to define a clinically practical risk score f
 
 # Phase 1: Model selection
 
-We considered several families of predictive model: logistic regression (LR), linear discriminant analysis (LDA), decision tree (DT), random forest (RF), nearest neighbors (NN), and support vector machine (SVM) using 1-, 2-, and 3-degree polynomial specifications.
+We considered several families of predictive model: logistic regression (LR), linear discriminant analysis (LDA), decision rules (DR), decision tree (DT), random forest (RF), nearest neighbors (NN), and support vector machine (SVM) using 1-, 2-, and 3-degree polynomial specifications.
 We will compare these models over a $3 \times 3$ grid of prediction tasks given by each combination of predictors (lung/liver medical history only, together with gender, and together with smoking history) and of response (ZZ, SZ/ZZ, or any non-MM).
 
 ```{r model selection results}
@@ -50,11 +50,12 @@ read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
   mutate(type = case_when(
     model == "logistic regression" | model == "linear discriminant" ~
       "generalized linear",
-    model == "decision tree" | model == "random forest" ~ "tree-based",
+    str_detect(model, "decision") | model == "random forest" ~
+      "rule/tree-based",
     model == "nearest neighbor" ~ "distance-based",
     str_detect(model, "svm") ~ "kernel-based"
   )) %>%
-  mutate(type == fct_inorder(type)) ->
+  mutate(type = fct_inorder(type)) ->
   model_types
 ```
 
@@ -78,6 +79,8 @@ In addition to the models' performance curves, we also include a marker at the s
 
 ```{r roc plots, fig.height=8}
 aatd_mod_res_pred %>%
+  left_join(model_types, by = "model") %>%
+  filter(type != "rule/tree-based") %>%
   group_by(model, predictors, response) %>%
   roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
   ungroup() %>%
@@ -94,8 +97,8 @@ aatd_mod_res_pred %>%
 ```
 
 The ROC curves show LR and LDA to perform very similarly. This is to be expected, since LDA can be understood as a generalization of LR to more than two classes (though they are not equivalent in the two-class case).
-NN models perform much less well, though still consistently better than DT and RF models, which are not visibly different from random screening.
-In some cases, SVM models outperform DT and RF and are competitive with LR and LDA, but in many others they perform worse than random screening.
+NN models perform much less well, though still consistently better than DR, DT, and RF models, which are not visibly different from random screening. (For clarity, these have been omitted from the plot.)
+In some cases, SVM models are competitive with LR and LDA, but in many others they perform worse than random screening.
 
 The ROC curves suggest that ZZ and, less so, SZ/ZZ genotypes are significantly easier to predict than arbitrary abnormal genotypes, and they demonstrate a modest benefit to including smoking history in most models but an uncertain benefit to including gender.
 As evaluated on our data, the standard recommendation underperforms random screening for SZ/ZZ and for arbitrary abnormal genotype, though it does provide a slight benefit in screening for ZZ.
@@ -194,6 +197,8 @@ In the plots below, note that both recall and precision lie along log-transforme
 
 ```{r pr plots, fig.height=6}
 aatd_mod_res_pred %>%
+  left_join(model_types, by = "model") %>%
+  filter(type != "rule/tree-based") %>%
   group_by(model, predictors, response) %>%
   pr_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
   ggplot(aes(x = recall, y = precision)) +
@@ -201,17 +206,17 @@ aatd_mod_res_pred %>%
   coord_equal() +
   geom_path(aes(color = model)) +
   geom_point(data = filter(aatd_copd_res, predictors != "Dx+age")) +
-  lims(x = c(0, 1), y = c(0, 1)) +
-  # scale_x_continuous(trans = "log", breaks = breaks_log(base = 10),
-  #                    labels = scales::label_percent()) +
-  # scale_y_continuous(trans = "log", breaks = breaks_log(base = 10),
-  #                    labels = scales::label_percent()) +
+  # lims(x = c(0, 1), y = c(0, 1)) +
+  scale_x_continuous(trans = "log", breaks = breaks_log(base = 10),
+                     labels = scales::label_percent()) +
+  scale_y_continuous(trans = "log", breaks = breaks_log(base = 10),
+                     labels = scales::label_percent()) +
   scale_color_brewer(type = "qual") +
   theme(legend.position = "bottom")
 ```
 
 The model families are not as clearly distinguishable in terms of precision and recall.
-The superiority of LR and LDA is discernible as the curves surpass 1% recall: the NN curves fall consistently below, and the DT and RF curves only appear to lie above them due to linear interpolation between measured values, which is inappropriate both for PR curves generally and for log--log plots.
+The superiority of LR and LDA is discernible as the curves surpass 1% recall: the NN curves fall consistently below. (If the DR, DT, and RF curves are plotted, they simply linearly interpolate between points at the top-left and bottom-right extremes, which gives a misleading idea of their performance in PR curves generally and for log--log plots.
 When predicting ZZ, all curves attain peak precision between 1% and 10% recall and decline in precision as recall approaches 100%. (The pattern is similar for predicting SZ/ZZ.)
 These differences are marginal, however---as can be seen when the PR curves are plotted on untransformed axes, all of these models perform quite poorly.
 
@@ -258,7 +263,7 @@ The plot below locates the accuracy and AUROC of each fitted ZZ prediction model
 The results are separated by model family, model specification (predictors used), and evaluation measure.
 The logistic regression models varied the penalty parameter while the random forest models varied the number of predictors used in each tree and the number of trees in the forest.
 
-```{r performance across parameters}
+```{r performance across parameters, fig.height=3.5}
 # compare performance of ZZ models across parameter settings
 aatd_metrics %>%
   filter(response == "ZZ") %>%
@@ -321,7 +326,7 @@ aatd_opt %>%
 The high accuracy rates are largely artifacts of the imbalance in the data; the ROC curves provide a more discriminating measure of performance. These are used below to visually compare performance between the model families and specifications.
 Remember that performance in each setting is an average taken over 6-fold cross-validation, from which we derive compatibility intervals.
 
-```{r optimal performance plot, fig.height=4}
+```{r optimal performance plot, fig.height=3}
 aatd_opt %>%
   filter(.metric == "AUROC") %>%
   mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
