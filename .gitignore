@@ -9,6 +9,8 @@ data-raw/
 ref/
 data/
 fig/
+pkg/
 /**/*.html
 /**/*.pdf
 /**/*.jpg
+

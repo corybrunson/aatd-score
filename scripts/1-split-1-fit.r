@@ -22,11 +22,7 @@ library(tidymodels)
 library(discrim)
 library(rules)
 
-# hyperparameters
-# p_data <- 1/10
-p_data <- 1/6
-# p_data <- 1
-n_train <- 2/3
+source(here::here("code/settings.r"))
 
 # genotypes to include in analysis
 genotype_incl <- read_rds(here::here("data/genotype-incl.rds"))
@@ -37,12 +33,12 @@ vars_predictors <- list(
   # `Dx+age` =
   #   expr(c(contains("age_guess"), contains("receipt_date"),
   #          starts_with("lung_"), starts_with("liver_"))),
+  # `Dx+tobacco` =
+  #   expr(c(contains("smoking_history_cigarette"),
+  #          # contains("any_tobacco_exposure"),
+  #          starts_with("lung_"), starts_with("liver_"))),
   `Dx+gender` =
-    expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_"))),
-  `Dx+tobacco` =
-    expr(c(contains("smoking_history_cigarette"),
-           # contains("any_tobacco_exposure"),
-           starts_with("lung_"), starts_with("liver_")))
+    expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_")))
 )
 
 # response variables as logical tests
@@ -143,7 +139,7 @@ ii <- if (file.exists(here::here("data/aatd-1-split-ii.rds"))) {
 #' Load data
 
 # load data and subset to a fixed stratified sample for all experiments
-set.seed(0L)
+set.seed(seed)
 read_rds(here::here("data/aatd-pred.rds")) %>%
   inner_join(read_rds(here::here("data/aatd-resp.rds")), by = "record_id") %>%
   mutate(stratum = case_when(
@@ -151,7 +147,7 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
     TRUE ~ "Ab"
   )) %>%
   group_by(stratum) %>%
-  slice_sample(prop = p_data) %>%
+  slice_sample(prop = p_data_1) %>%
   ungroup() %>%
   select(record_id) ->
   aatd_subset
@@ -224,7 +220,8 @@ write_rds(aatd_copd_res, here::here("data/aatd-1-copd.rds"))
 #' Prepare recipes
 
 # initial partition
-aatd_split <- initial_split(aatd_data, prop = n_train, strata = geno_class)
+set.seed(seed)
+aatd_split <- initial_split(aatd_data, prop = n_train_1, strata = geno_class)
 
 # prepare regression recipe
 recipe(training(aatd_split), geno_class ~ .) %>%
