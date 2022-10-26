@@ -71,11 +71,6 @@ aatd_met <- metric_set(accuracy, roc_auc, pr_auc)
 
 # tuning restrictions
 read_rds(here::here("data/aatd-pred.rds")) %>%
-  sample_frac(size = p_data) %>%
-  nrow() ->
-  n_obs
-read_rds(here::here("data/aatd-pred.rds")) %>%
-  sample_frac(size = p_data) %>%
   # all predictors from any specification
   select(unique(unlist(sapply(vars_predictors, eval)))) %>%
   ncol() ->
@@ -142,7 +137,6 @@ print("--------------------------------")
 
 # load and subset predictors data
 read_rds(here::here("data/aatd-pred.rds")) %>%
-  sample_frac(size = p_data) %>%
   # predictors from current specification
   select(record_id, eval(vars_predictors[[i_pred]])) %>%
   # eligible records
