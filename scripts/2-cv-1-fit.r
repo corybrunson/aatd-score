@@ -15,12 +15,7 @@ library(tidymodels)
 
 #' Setup
 
-# hyperparameters
-# p_data <- 1/10
-# p_data <- 1/6
-p_data <- 1
-# n_folds <- 3L
-n_folds <- 6L
+source(here::here("code/settings.r"))
 
 # genotypes to include in analysis
 genotype_incl <- read_rds(here::here("data/genotype-incl.rds"))
@@ -31,12 +26,12 @@ vars_predictors <- list(
   # `Dx+age` =
   #   expr(c(contains("age_guess"), contains("receipt_date"),
   #          starts_with("lung_"), starts_with("liver_"))),
+  # `Dx+tobacco` =
+  #   expr(c(contains("smoking_history_cigarette"),
+  #          # contains("any_tobacco_exposure"),
+  #          starts_with("lung_"), starts_with("liver_"))),
   `Dx+gender` =
-    expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_"))),
-  `Dx+tobacco` =
-    expr(c(contains("smoking_history_cigarette"),
-           # contains("any_tobacco_exposure"),
-           starts_with("lung_"), starts_with("liver_")))
+    expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_")))
 )
 
 # response variables as logical tests
@@ -51,7 +46,7 @@ vars_response <- list(
 #' Subset data
 
 read_rds(here::here("data/aatd-pred.rds")) %>%
-  sample_frac(size = p_data) %>%
+  sample_frac(size = p_data_2) %>%
   # all predictors from any specification
   select(record_id, unique(unlist(sapply(vars_predictors, eval)))) %>%
   # filter missing gender
@@ -114,8 +109,8 @@ ii <- if (file.exists(here::here("data/aatd-cv-ii.rds"))) {
 } else {
   c(0L, 0L)
 }
-aatd_metrics <- if (file.exists(here::here("data/aatd-eval.rds"))) {
-  read_rds(here::here("data/aatd-eval.rds"))
+aatd_metrics <- if (file.exists(here::here("data/aatd-2-eval.rds"))) {
+  read_rds(here::here("data/aatd-2-eval.rds"))
 } else {
   tibble()
 }
@@ -196,7 +191,7 @@ recipe(aatd_data, geno_class ~ .) %>%
 #' Folds
 
 # folds for cross-validation evaluation
-aatd_cv <- vfold_cv(aatd_data, v = n_folds, strata = geno_class)
+aatd_cv <- vfold_cv(aatd_data, v = n_folds_2, strata = geno_class)
 
 #' Logistic regression
 
@@ -391,8 +386,8 @@ aatd_metrics <- bind_rows(aatd_metrics, aatd_rf_met)
 #   aatd_nn_met
 # aatd_metrics <- bind_rows(aatd_metrics, aatd_nn_met)
 
-write_rds(aatd_metrics, here::here("data/aatd-eval.rds"))
-write_rds(c(i_pred, i_resp), here::here("data/aatd-cv-ii.rds"))
+write_rds(aatd_metrics, here::here("data/aatd-2-eval.rds"))
+write_rds(c(i_pred, i_resp), here::here("data/aatd-2-cv-ii.rds"))
 
 }#LOOP
 }#LOOP

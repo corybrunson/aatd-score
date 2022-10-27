@@ -1,11 +1,11 @@
 
-#' Setup
-
 library(tidyverse)
 library(tidymodels)
 library(reticulate)
 np <- import("numpy")
 fr <- import("fasterrisk.fasterrisk")
+
+#' Setup
 
 source(here::here("code/settings.r"))
 
@@ -35,6 +35,27 @@ vars_response <- list(
   Ab = expr(genotype != "MM")
 )
 
+#' Subset data
+
+read_rds(here::here("data/aatd-pred.rds")) %>%
+  sample_frac(size = p_data_2) %>%
+  # all predictors from any specification
+  select(record_id, unique(unlist(sapply(vars_predictors, eval)))) %>%
+  # filter missing gender
+  filter(gender != "(Missing)") %>%
+  # drop any cases with missing values
+  drop_na() %>%
+  # store `record_id`
+  select(record_id) ->
+  elig_ids
+
+#' Evaluation measures
+
+# measures to calculate
+aatd_met <- metric_set(accuracy, roc_auc, pr_auc)
+
+#' Model specifications
+
 # `FasterRisk` settings
 # TODO: ask how the following parameters are used
 n_terms <- 7L
@@ -43,24 +64,11 @@ abs_bound <- 5
 n_retain <- 12L
 n_mults <- 24L
 
-#' Result tables
-
-aatd_rf_res_metric <- tibble()
-aatd_rf_res_pred <- tibble()
-
-# load data and subset to a fixed stratified sample for all experiments
-set.seed(seed)
-read_rds(here::here("data/aatd-pred.rds")) %>%
-  inner_join(read_rds(here::here("data/aatd-resp.rds")), by = "record_id") %>%
-  mutate(stratum = case_when(
-    genotype == "SZ" | genotype == "ZZ" | genotype == "MM" ~ genotype,
-    TRUE ~ "Ab"
-  )) %>%
-  group_by(stratum) %>%
-  slice_sample(prop = p_data_1) %>%
-  ungroup() %>%
-  select(record_id) ->
-  aatd_subset
+aatd_metrics <- if (file.exists(here::here("data/aatd-2-fr-eval.rds"))) {
+  read_rds(here::here("data/aatd-2-fr-eval.rds"))
+} else {
+  tibble()
+}
 
 for (i_pred in seq_along(vars_predictors)) {#LOOP
 for (i_resp in seq_along(vars_response)) {#LOOP
@@ -75,12 +83,14 @@ print("--------------------------------")
 
 #' Pre-process data
 
-# load predictors data
+# load and subset predictors data
 read_rds(here::here("data/aatd-pred.rds")) %>%
-  # choice of predictors
+  # predictors from current specification
   select(record_id, eval(vars_predictors[[i_pred]])) %>%
-  # subset
-  semi_join(aatd_subset, by = "record_id") ->
+  # eligible records
+  semi_join(elig_ids, by = "record_id") %>%
+  # remove empty factor levels
+  mutate(across(where(is.factor), fct_drop)) ->
   aatd_data
 
 # join in responses
@@ -101,14 +111,10 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
   inner_join(aatd_data, by = "record_id") ->
   aatd_data
 
-#' Prepare recipes
-
-# initial partition
-set.seed(seed)
-aatd_split <- initial_split(aatd_data, prop = n_train_1, strata = geno_class)
+#' Specify pre-processing recipes
 
 # prepare binarization recipe
-recipe(training(aatd_split), geno_class ~ .) %>%
+recipe(aatd_data, geno_class ~ .) %>%
   # stop treating the ID as a predictor
   #update_role(record_id, new_role = "id variable") %>%
   step_rm(record_id, genotype) %>%
@@ -124,17 +130,23 @@ recipe(training(aatd_split), geno_class ~ .) %>%
   prep() ->
   aatd_int_rec
 
+#' Folds
+
+# folds for cross-validation evaluation
+aatd_cv <- vfold_cv(aatd_data, v = n_folds_2, strata = geno_class)
+
 #' FasterRisk
 
+transmute(aatd_cv, id) %>%
+  mutate(metrics = vector(mode = "list", length = nrow(.))) ->
+  aatd_fr_met
+
+for (i_fold in seq(n_folds_2)) {#LOOP
+# i_fold <- 1L
+
 # obtain training and testing sets
-# here::here("pkg/FasterRisk/uf_alpha1/aatd_fr_train.csv") %>%
-#   read_csv(col_types = str_c(rep("i", 23), collapse = "")) ->
-#   aatd_train
-aatd_train <- bake(aatd_int_rec, training(aatd_split))
-# here::here("pkg/FasterRisk/uf_alpha1/aatd_fr_test.csv") %>%
-#   read_csv(col_types = str_c(rep("i", 23), collapse = "")) ->
-#   aatd_test
-aatd_test <- bake(aatd_int_rec, testing(aatd_split))
+aatd_train <- bake(aatd_int_rec, training(aatd_cv$splits[[i_fold]]))
+aatd_test <- bake(aatd_int_rec, testing(aatd_cv$splits[[i_fold]]))
 
 # convert to `numpy` arrays
 aatd_train %>%
@@ -174,6 +186,7 @@ aatd_rso_res <- rso$get_models()
 
 #' Evaluation and comparison of models
 
+aatd_fr_fold_met <- tibble()
 for (i_model in seq(n_models)) {
   
   # build classifier
@@ -194,31 +207,32 @@ for (i_model in seq(n_models)) {
     mutate(across(
       c(.pred_class, geno_class),
       ~ factor(ifelse(. == 1L, "Normal", "Abnormal"))
+    )) %>%
+    mutate(across(
+      c(.pred_class, geno_class),
+      ~ factor(., c("Normal", "Abnormal"))
     )) ->
     aatd_fr_res
   
   # metric tables
   aatd_fr_res %>%
     metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal) %>%
-    mutate(model = str_c("FasterRisk ", i_model),
-           predictors = pred, response = resp) %>%
-    select(response, predictors, model, everything()) ->
-    aatd_rf_res_metric_i
-  aatd_rf_res_metric <- bind_rows(aatd_rf_res_metric, aatd_rf_res_metric_i)
-  # write to data file
-  write_rds(aatd_rf_res_metric, here::here("data/aatd-1-rf-metric.rds"))
-  
-  # prediction tables
-  aatd_fr_res %>%
-    mutate(model = str_c("FasterRisk ", i_model),
-           predictors = pred, response = resp) %>%
-    select(response, predictors, model, everything()) ->
-    aatd_rf_res_pred_i
-  aatd_rf_res_pred <- bind_rows(aatd_rf_res_pred, aatd_rf_res_pred_i)
-  # write to data file
-  write_rds(aatd_rf_res_pred, here::here("data/aatd-1-rf-pred.rds"))
+    mutate(
+      model = "FasterRisk", number = i_model,
+      predictors = pred, response = resp
+    ) ->
+    aatd_fr_fold_met_i
+  aatd_fr_fold_met <- bind_rows(aatd_fr_fold_met, aatd_fr_fold_met_i)
   
 }
+
+aatd_fr_met$metrics[[i_fold]] <- aatd_fr_fold_met
+
+}#LOOP
+
+aatd_fr_met %>%
+  unnest(metrics) %>%
+  write_rds(here::here("data/aatd-2-fr-eval.rds"))
 
 }#LOOP
 }#LOOP
