@@ -22,6 +22,10 @@ vars_predictors <- list(
   #   expr(c(contains("smoking_history_cigarette"),
   #          # contains("any_tobacco_exposure"),
   #          starts_with("lung_"), starts_with("liver_"))),
+  `Dx+smoke hx` = expr(c(contains("smoking_hx"),
+                         starts_with("lung_"), starts_with("liver_"))),
+  `Dx+smoke use` = expr(c(contains("smoking_use"),
+                          starts_with("lung_"), starts_with("liver_"))),
   `Dx+gender` =
     expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_")))
 )
@@ -86,6 +90,8 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
 # join in responses
 read_rds(here::here("data/aatd-resp.rds")) %>%
   select(record_id, genotype) %>%
+  # remove missing responses
+  drop_na() %>%
   semi_join(genotype_incl, by = "genotype") %>%
   # choice of response
   mutate(
@@ -96,8 +102,6 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
     # make abnormal genotype the first factor level (outcome)
     geno_class = factor(geno_class, c("Abnormal", "Normal"))
   ) %>%
-  # remove missing responses
-  drop_na() %>%
   inner_join(aatd_data, by = "record_id") ->
   aatd_data
 

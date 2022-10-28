@@ -37,6 +37,10 @@ vars_predictors <- list(
   #   expr(c(contains("smoking_history_cigarette"),
   #          # contains("any_tobacco_exposure"),
   #          starts_with("lung_"), starts_with("liver_"))),
+  `Dx+smoke hx` = expr(c(contains("smoking_hx"),
+                          starts_with("lung_"), starts_with("liver_"))),
+  `Dx+smoke use` = expr(c(contains("smoking_use"),
+                          starts_with("lung_"), starts_with("liver_"))),
   `Dx+gender` =
     expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_")))
 )
@@ -171,6 +175,8 @@ print("--------------------------------")
 read_rds(here::here("data/aatd-pred.rds")) %>%
   # choice of predictors
   select(record_id, eval(vars_predictors[[i_pred]])) %>%
+  # remove missing values
+  drop_na() %>%
   # subset
   semi_join(aatd_subset, by = "record_id") ->
   aatd_data
@@ -178,6 +184,8 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
 # join in responses
 read_rds(here::here("data/aatd-resp.rds")) %>%
   select(record_id, genotype) %>%
+  # remove missing responses
+  drop_na() %>%
   semi_join(genotype_incl, by = "genotype") %>%
   # choice of response
   mutate(
@@ -188,8 +196,6 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
     # make abnormal genotype the first factor level (outcome)
     geno_class = factor(geno_class, c("Abnormal", "Normal"))
   ) %>%
-  # remove missing responses
-  drop_na() %>%
   inner_join(aatd_data, by = "record_id") ->
   aatd_data
 
@@ -228,11 +234,13 @@ recipe(training(aatd_split), geno_class ~ .) %>%
   # stop treating the ID as a predictor
   #update_role(record_id, new_role = "id variable") %>%
   step_rm(record_id, genotype) %>%
+  # drop cases with missing values
+  # step_naomit() %>%
   # remove redundant lung & liver categories
   step_rm(ends_with("_none")) %>%
   # remove any variables that are constant within classes (zero variance)
   step_zv(all_predictors()) %>%
-  # one-hot encoding of factors
+  # linearly independent encoding of factors
   step_dummy(all_nominal_predictors(), one_hot = FALSE) %>%
   # binary encoding of logicals
   step_mutate_at(has_type(match = "logical"), fn = as.integer) %>%
@@ -244,10 +252,12 @@ recipe(training(aatd_split), geno_class ~ .) %>%
   # stop treating the ID as a predictor
   #update_role(record_id, new_role = "id variable") %>%
   step_rm(record_id, genotype) %>%
+  # drop cases with missing values
+  # step_naomit() %>%
   # one-hot encoding of factors
   step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%
   # binary encoding of logicals
-  step_mutate_at(has_type(match = "logical"), fn = ~ . * 2L - 1L) %>%
+  step_mutate_at(has_type(match = "logical"), fn = as.integer) %>%
   prep() ->
   aatd_num_rec
 

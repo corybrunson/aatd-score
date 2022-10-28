@@ -22,6 +22,10 @@ vars_predictors <- list(
   #   expr(c(contains("smoking_history_cigarette"),
   #          # contains("any_tobacco_exposure"),
   #          starts_with("lung_"), starts_with("liver_"))),
+  `Dx+smoke hx` = expr(c(contains("smoking_hx"),
+                         starts_with("lung_"), starts_with("liver_"))),
+  `Dx+smoke use` = expr(c(contains("smoking_use"),
+                          starts_with("lung_"), starts_with("liver_"))),
   `Dx+gender` =
     expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_")))
 )
@@ -41,10 +45,10 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
   sample_frac(size = p_data_2) %>%
   # all predictors from any specification
   select(record_id, unique(unlist(sapply(vars_predictors, eval)))) %>%
-  # filter missing gender
-  filter(gender != "(Missing)") %>%
   # drop any cases with missing values
   drop_na() %>%
+  # filter missing gender
+  filter(gender != "(Missing)") %>%
   # store `record_id`
   select(record_id) ->
   elig_ids

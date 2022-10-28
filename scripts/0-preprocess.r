@@ -157,6 +157,15 @@ aatd_data %>%
   )) %>%
   # drop response variables
   select(-starts_with("genotype"), -starts_with("aat_")) %>%
+  # coarser smoking / tobacco history variables
+  mutate(
+    smoking_hx = smoking_history_cigarette == "Past" |
+      smoking_history_cigarette == "Current",
+    smoking_use = factor(
+      ifelse(smoking_hx, as.character(smoking_history_cigarette), "Never"),
+      levels = c("Never", "Past", "Current")
+    )
+  ) %>%
   # multiple packs per day by years
   mutate(
     pack_years_current = packs_per_day_current * for_how_many_years_current,
@@ -168,12 +177,8 @@ aatd_data %>%
     -patient_received_what_is_alpha_1_brochure,
     -physician_address_zipcode
   ) %>%
-  # drop or explicate missing values
+  # drop variables with many missing values
   select(-pack_years_current, -pack_years_past) %>%
-  mutate(across(
-    c(gender, race, smoking_history_cigarette, any_tobacco_exposure),
-    ~ fct_explicit_na(factor(.))
-  )) %>%
   print() ->
   aatd_pred
 
