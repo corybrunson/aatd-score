@@ -24,7 +24,8 @@ The goal of the next phase will be to define a clinically practical risk score f
 # Phase 1: Model selection
 
 We considered several families of predictive model: logistic regression (LR), linear discriminant analysis (LDA), decision rules (DR), decision tree (DT), random forest (RF), nearest neighbors (NN), and support vector machine (SVM) using 1-, 2-, and 3-degree polynomial specifications.
-We will compare these models over a $3 \times 3$ grid of prediction tasks given by each combination of predictors (lung/liver medical history only, together with gender, and together with smoking history) and of response (ZZ, SZ/ZZ, or any non-MM).
+We also considered integer risk scores obtained using FasterRisk (FR), which would not need to be transformed in order to be clinically practical (Liu &al, 2022).
+We will compare these models over a $3 \times 3$ grid of prediction tasks given by each combination of predictors (lung/liver medical history only, together with gender, and together with either smoking exposure or smoking history) and of response (ZZ, SZ/ZZ, or any non-MM).
 
 ```{r model selection results}
 # read in model summary data
@@ -44,6 +45,10 @@ read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_pred
+read_rds(here::here(str_c("data/aatd-1-fr-pred-", sample_denom, ".rds"))) %>%
+  filter(predictors != "Dx+age") %>%
+  mutate(across(c(predictors, response), fct_inorder)) ->
+  aatd_fr_res_pred
 # model family groups
 read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
   distinct(model) %>%
@@ -61,7 +66,8 @@ read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
 
 For this phase, models were evaluated using a fixed sample of $\frac{1}{`r sample_denom`}$ of the data.
 The sample was stratified by a 4-way categorization of genotypes: ZZ, SZ, other non-MM, and MM. This was done in order to prevent significant changes in the balance of response values in each model.
-Models were fit on a \frac{2}{3} training set of this sample and evaluated on the remaining \frac{1}{3} testing set. This partition was also stratified by genotype and fixed across all evaluations.
+Models were fit on a \frac{2}{3} training set of this sample and evaluated on the remaining \frac{1}{3} testing set. This partition was also stratified by genotype, and the same partition was used across all evaluations.
+Since our goal in this phase was to identify generally over-performing models to optimize in the next phase, we used common or default parameter settings throughout.
 
 ## Performance curves
 
@@ -77,7 +83,9 @@ In addition to the models' performance curves, we also include a marker at the s
 
 ### Receiver operator curves
 
-```{r roc plots, fig.height=8}
+#### Machine learning models
+
+```{r roc plots for ML, fig.height=8}
 aatd_mod_res_pred %>%
   left_join(model_types, by = "model") %>%
   filter(type != "rule/tree-based") %>%
@@ -100,10 +108,35 @@ The ROC curves show LR and LDA to perform very similarly. This is to be expected
 NN models perform much less well, though still consistently better than DR, DT, and RF models, which are not visibly different from random screening. (For clarity, these have been omitted from the plot.)
 In some cases, SVM models are competitive with LR and LDA, but in many others they perform worse than random screening.
 
+#### Integer programming models
+
+```{r roc plots for FR, fig.height=8}
+aatd_fr_res_pred %>%
+  group_by(model, predictors, response) %>%
+  roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ungroup() %>%
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  coord_equal() +
+  geom_path(aes(color = model)) +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
+  geom_point(data = aatd_copd_res) +
+  scale_x_continuous(labels = scales::label_percent()) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  scale_color_brewer(type = "qual") +
+  theme(legend.position = "bottom")
+```
+
+FasterRisk returns an ensemble of models of similar accuracy, some of which may be more useful than others.
+For each set of predictors and responses, we retrieved six models from the ensemble to compare.
+At the task of predicting SZ or any abnormal genotype, these models performed equally well (or poorly). At the task of predicting ZZ genotype, two subgroups were distinguishable. One subgroup was superior with respect to AUROC overall but moreover showed greatest improvement at increasing sensitivity at low-to-medium specificity.
+
+#### Sensitivity gain
+
 The ROC curves suggest that ZZ and, less so, SZ/ZZ genotypes are significantly easier to predict than arbitrary abnormal genotypes, and they demonstrate a modest benefit to including smoking history in most models but an uncertain benefit to including gender.
 As evaluated on our data, the standard recommendation underperforms random screening for SZ/ZZ and for arbitrary abnormal genotype, though it does provide a slight benefit in screening for ZZ.
 
-It is generally understood that sensitivity is more valuable than specificity in this context: The potential cost of missing an abnormal AAT genotype is much higher than that of an unnecessary screen.
+Sensitivity is more valuable than specificity in our context: The potential cost of missing an abnormal AAT genotype is much higher than that of an unnecessary screen.
 Our primary focus, then, is the top half-space of each ROC plot.
 Troublingly, COPD-based screening shows lower sensitivity than random screening for all three abnormal genotype sets, though only slightly in the case of ZZ.
 The NN and RF models show little difference from random screening toward the top-left corner of each plot, and the LR and LDA models show much clearer improvement with the addition of gender or smoking history as predictors and only minor (< 5%) improvement without.
@@ -114,6 +147,8 @@ The table and plot below summarize the sensitivity gains of all model families r
 ```{r sensitivity gain, fig.height=6}
 # improvement relative to random screening
 aatd_mod_res_pred %>%
+  bind_rows(aatd_fr_res_pred) %>%
+  mutate(model = fct_inorder(str_remove(model, " [0-9]+$"))) %>%
   group_by(model, predictors, response) %>%
   roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
   ungroup() %>%
@@ -151,8 +186,11 @@ aatd_mod_res_pred %>%
   knitr::kable(align = "lrr")
 # improvement relative to COPD-based screening
 aatd_mod_res_pred %>%
+  bind_rows(aatd_fr_res_pred) %>%
+  mutate(model = fct_inorder(str_remove(model, " [0-9]+$"))) %>%
   left_join(model_types, by = "model") %>%
-  filter(type == "generalized linear" & response == "ZZ") %>%
+  filter((type == "generalized linear" | model == "FasterRisk") &
+           response == "ZZ") %>%
   group_by(model, predictors, response) %>%
   roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
   ungroup() %>%
@@ -185,9 +223,9 @@ aatd_mod_res_pred %>%
   theme(legend.position = "right")
 ```
 
-The greatest improvements in ZZ prediction over random screening are limited to the LR and LDA models and range from 17 to 20 percentage points.
+The greatest improvements in ZZ prediction over random screening are limited to the LR, LDA, and FR models and range from 25 to 45 percentage points.
 These obtain near 50% specificity, which makes for useful comparisons against COPD-based screening.
-For ZZ prediction (see the plot above), the LR and LDA models obtain between 15 and 21 percentage point improvement over COPD-based screening in sensitivity subject to a specificity loss of less than 5 percentage points.
+For ZZ prediction (see the plot above), the LR, LDA, and FR models obtain between 19 and 35 percentage point improvement over COPD-based screening in sensitivity subject to a specificity loss of less than 5 percentage points.
 
 ### Precision--recall curves
 
@@ -195,7 +233,9 @@ Whereas recall is equivalent to sensitivity (true positive rate, the rate at whi
 Precision--recall curves therefore map the cost, in decreased value of tests (upward along the ordinate), of increasing the detection of cases (rightward along the abscissa).
 In the plots below, note that both recall and precision lie along log-transformed axes.
 
-```{r pr plots, fig.height=6}
+#### Machine learning models
+
+```{r pr plots for ML, fig.height=6}
 aatd_mod_res_pred %>%
   left_join(model_types, by = "model") %>%
   filter(type != "rule/tree-based") %>%
@@ -220,13 +260,36 @@ The superiority of LR and LDA is discernible as the curves surpass 1% recall: th
 When predicting ZZ, all curves attain peak precision between 1% and 10% recall and decline in precision as recall approaches 100%. (The pattern is similar for predicting SZ/ZZ.)
 These differences are marginal, however---as can be seen when the PR curves are plotted on untransformed axes, all of these models perform quite poorly.
 
-Taken together, the ROC and PR curves favor logistic regression (and linear discriminant analysis) as candidate bases for a new risk score.
+#### Integer programming models
+
+```{r pr plots for FR, fig.height=6}
+aatd_fr_res_pred %>%
+  group_by(model, predictors, response) %>%
+  pr_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ggplot(aes(x = recall, y = precision)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  coord_equal() +
+  geom_path(aes(color = model)) +
+  geom_point(data = filter(aatd_copd_res, predictors != "Dx+age")) +
+  # lims(x = c(0, 1), y = c(0, 1)) +
+  scale_x_continuous(trans = "log", breaks = breaks_log(base = 10),
+                     labels = scales::label_percent()) +
+  scale_y_continuous(trans = "log", breaks = breaks_log(base = 10),
+                     labels = scales::label_percent()) +
+  scale_color_brewer(type = "qual", guide = "none") +
+  theme(legend.position = "bottom")
+```
+
+PR curves are less discriminating among the FasterRisk models.
+Overall, the FR models are competitive with the best of the ML models.
+
+Taken together, the ROC and PR curves favor logistic regression (and linear discriminant analysis) as candidate bases for a new risk score, though they should be carefully compared with the use-ready risk scores produced via integer programming by FasterRisk.
 
 # Phase 2: Model optimization
 
 ```{r model optimization results}
 # read in evaluation data
-read_rds(here::here("data/aatd-eval.rds")) %>%
+read_rds(here::here("data/aatd-2-eval.rds")) %>%
   mutate(across(c(model, predictors, response), fct_inorder)) %>%
   mutate(.metric = fct_inorder(.metric)) %>%
   mutate(.metric = fct_recode(
@@ -234,15 +297,29 @@ read_rds(here::here("data/aatd-eval.rds")) %>%
     kappa = "kap", `mean log loss` = "mn_log_loss", AUROC = "roc_auc"
   )) ->
   aatd_metrics
+# read in evaluation data
+read_rds(here::here("data/aatd-2-eval.rds")) %>%
+  mutate(across(c(model, predictors, response), fct_inorder)) ->
+  aatd_ml_metrics
+# read_rds(here::here("data/aatd-2-fr-eval.rds")) %>%
+read_rds(here::here("data/aatd-2-fr-eval-old.rds")) %>%
+  mutate(across(c(model, predictors, response), fct_inorder)) %>%
+  group_by_at(vars(-id, -fold, -number)) %>%
+  summarize(.estimate = mean(.estimate), .groups = "drop") ->
+  aatd_fr_metrics
 ```
 
 We considered two model families for the optimization phase: logistic regression and random forest.
-We omitted linear discriminant analysis from this phase because it closely matched the performance of logistic regression, and because it is less well-understood by clinical researchers and not commonly used to derive risk scores.
+We omitted linear discriminant analysis because it closely matched the performance of logistic regression, and because it is less well-understood by clinical researchers and not commonly used to derive risk scores. We also note that it relies on weaker assumptions about the data, which translate into less interpretable model components.
 We omitted decision trees because they showed no benefit in any of the experiments in Phase 1.
 
 We omitted nearest neighbors and support vector machines because they proved extremely time- and memory-intensive to fit. In the case of NN, this was due to limitations of the implementation: Our data comprise binary (and, in some cases, categorical) variables, so that the space of possible records is a hypercube. As a result, only a small number of neighborhoods can be defined around each case, using the Hamming distance defined by the number of variables on which two cases differ, and records are duplicated at high rates. In contrast, most NN implementations rely on the computation of all pairwise distances between cases, which is highly redundant in this setting. Without a weighting scheme on the variables, the NN approach is mismatched, and would require a new implementation to be computationally feasible.
 
 In general, SVMs are less interpretable than LR, decision tree, and even RF and NN models, and thereby less suitable for risk score derivation, but they can be justified when their predictive performance significantly exceeds these approaches. Our preliminary experiments showed no evidence of superior performance---indeed, SVMs performed slightly worse than most other model families---so we omit them from consideration.
+
+As in the first phase, we included models obtained by FasterRisk in this comparison.
+These models are generated and optimized in fundamentally different ways from the preceding model families:
+First, the FasterRisk program returns a collection of similarly-performing models rather than a single best-fit model. This is in part because the underlying space of possible models is not approximately continuous but coarsely discrete: Whereas the coefficients of LR and the tree weights of RF can be continuously tuned, the integer coefficients of FR models cannot. Moreover, two similarly-performing risk scores may assign meaningfully different weights to the same or even different sets of predictors, so the selection of a "best" model from among this collection has less to do with a marginal improvement in some performance measure than with the usefulness of its interpretation.
 
 ## Comparison of model families
 
@@ -250,12 +327,23 @@ Across the same sets of predictors and responses as in Phase 1, we evaluated LR 
 For each 5--1 split of a 6-fold partition, models were _trained_ and _tuned_ on the $\frac{5}{6}$ part by identifying the parameter settings that obtained the best fit, then _tested_ on the remaining $\frac{1}{6}$.
 Logistic regression models were tuned over 6 values of the penalty parameter ($10 ^ {-10}$ through $10 ^ 0$ with exponents at increments of $2$), which controls the cost of each additional predictor in the pruned model.
 Random forest models were tuned over 10 parameter settings: each combination of 5 numbers of trees ($1$ through $100$ at rounded powers of $\sqrt{10}$) and 2 numbers of predictors per tree ($p ^ {1/3} \approx 3$ and $\sqrt{p} \approx 4$, where $p$ is the total number of predictors).
-We focused on two performance measures: overall accuracy and AUROC.
 
+We tuned two parameter of FasterRisk: the number of terms (predictors) allowed in the score, and the bound on the values of their coefficients.
+In the first phase, we allotted 7 terms to each FR model, a rough upper bound on the number of "slots" available to human working memory (Miller &al, 2018), and coefficient values between $-5$ and $5$, the default setting.
+It may be that allocation of more predictors or greater coefficient range would achieve still superior performance, and many widely-used risk scores rely on larger values of both numbers.
+We set out to determine whether this is the case.
+The fewest predictors available were 18 (lung and liver history only), whereas the most convenient risk scores include 5 or so items. We obtained risk scores using 5, 10, and 15 items each.
+We considered absolute coefficient bounds on either side of $5$, i.e. $3$ (yielding a Likert-style range from $-3$ to $3$) and $7$.
+For each combination of predictors, response, number of terms, and coefficient range, we sampled 2 generated risk scores.
+
+We focused on two performance measures: overall accuracy and AUROC.
 By far the strongest determinant of predictive performance was the genotype subclass being predicted: prediction of ZZ alone achieved greatest accuracy (near 99%), prediction of SZ or ZZ was nearly as accurate, and prediction of any abnormal (non-MM) genotype was much more difficult (near 85%).
 This pattern was much noisier, though still detectable, when evaluating performance by AUROC---though by this metric the model family was most determinative (logistic regression outperformed random forest on every task.)
 This may be due not to the task of predicting ZZ genotypes being easier but to the population of ZZ cases being smaller, which can increase the nominal performance of a model by increasing the lower bounds on its sensitivity ... (cite paper)
 Though, since ZZ cases are also the most clinically urgent to detect, we focus on this task when evaluating the optimized models.
+
+Multiple FR models are returned with each run, under the same parameter settings.
+As with the ML models, we fit FR models on the $\frac{5}{6}$ training data and evaluate each model's performance on the $\frac{1}{6}$ testing data, which yields 12 rather than 6 model evaluations per parameter setting.
 
 ### Range of performance across parameter settings
 
@@ -263,39 +351,58 @@ The plot below locates the accuracy and AUROC of each fitted ZZ prediction model
 The results are separated by model family, model specification (predictors used), and evaluation measure.
 The logistic regression models varied the penalty parameter while the random forest models varied the number of predictors used in each tree and the number of trees in the forest.
 
-```{r performance across parameters, fig.height=3.5}
+```{r performance across parameters, fig.height=4.5}
 # compare performance of ZZ models across parameter settings
-aatd_metrics %>%
+aatd_ml_metrics %>%
+  bind_rows(aatd_fr_metrics) %>%
   filter(response == "ZZ") %>%
-  unnest(hyperparameters) %>%
+  unnest(hyperparameters, keep_empty = TRUE) %>%
+  mutate(model = fct_inorder(model)) %>%
   group_by_at(vars(-id, -.estimate)) %>%
-  summarize(mean = mean(.estimate)) %>%
-  filter(.metric == "accuracy" | .metric == "AUROC") %>%
-  mutate(predictors = fct_rev(predictors)) %>%
-  ggplot(aes(x = mean, y = predictors)) +
-  facet_grid(model ~ .metric, scales = "free_x") +
+  summarize(mean = mean(.estimate), .groups = "drop") %>%
+  filter(.metric == "accuracy" | .metric == "roc_auc") %>%
+  mutate(.metric = c(accuracy = "Accuracy", roc_auc = "AUROC")[.metric]) %>%
+  mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
+  mutate(formula = fct_rev(formula)) %>%
+  ggplot(aes(x = mean, y = formula)) +
+  facet_grid(rows = vars(model), cols = vars(.metric), scales = "free_x") +
+  geom_boxplot(color = "#d32737") +
   geom_jitter(width = 0, height = 1/4, alpha = .5) +
-  labs(x = "Performance", y = "Predictors") +
-  ggtitle("Accuracy of predictive models of ZZ genotype")
+  labs(x = NULL, y = NULL) +
+  ggtitle("Performance of predictive models of ZZ genotype")
 ```
 
 Measured by overall accuracy, LR models showed more consistency across parameter settings, but some RF models achieved greater ultimate performance.
-On the more important measure of AUROC, however, LR models universally outperformed RF models.
+Most FR models improved still upon the RF models, but with much more variability in performance.
+On the more important measure of AUROC, however, LR models universally outperformed RF models, and even outperformed most FR models.
+This is not unexpected; FR models are derived from LR models and comprise a subclass subject to additional constraints. But the narrow margins by which LR models outperform (some) FR models suggest that they are a superior approach. (Optimized LR models must be transformed into usable risk scores, at some cost to their performance that cannot be known in advance.)
+
 Among the LR models, the inclusion of gender did not improve performance by either measure, but the inclusion of smoking history led to consistent, though not highly significant, improvement (a less than 0.01% increase in accuracy and a less than 5% increase in AUROC).
+Among the FR models, only use history (not exposure history) provided substantial gains in performance over the history-only variable set.
 
 ### Optimized parameter settings
 
 ```{r optimal parameters}
 # best parameter settings for each model and formula by two measures
-aatd_metrics %>%
+aatd_ml_metrics %>%
+  bind_rows(aatd_fr_metrics) %>%
   filter(response == "ZZ") %>%
-  filter(.metric == "accuracy" | .metric == "AUROC") %>%
+  unnest(hyperparameters, keep_empty = TRUE) %>%
+  mutate(model = fct_inorder(model)) %>%
   group_by_at(vars(-id, -.estimate)) %>%
   summarize(mean = mean(.estimate), sd = sd(.estimate), .groups = "drop") %>%
+  filter(.metric == "accuracy" | .metric == "roc_auc") %>%
+  mutate(.metric = c(accuracy = "Accuracy", roc_auc = "AUROC")[.metric]) %>%
+  mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
+  mutate(formula = fct_rev(formula)) %>%
   group_by(model, predictors, response, .metric) %>%
   filter(mean == max(mean)) %>%
-  unnest(hyperparameters) %>%
-  mutate(param_pref = rank(ifelse(is.na(penalty), desc(trees), penalty))) %>%
+  # rank model parameter settings
+  mutate(param_pref = case_when(
+    ! is.na(penalty) ~ rank(penalty),
+    ! is.na(trees) ~ rank(desc(trees)),
+    ! is.na(terms) ~ rank(terms)
+  )) %>%
   filter(param_pref == min(param_pref)) %>%
   ungroup() ->
   aatd_opt
@@ -312,34 +419,44 @@ aatd_opt %>%
     ),
     mtry = as.character(mtry), trees = as.character(trees)
   ) %>%
-  mutate(across(c(penalty, mtry, trees), ~ ifelse(is.na(.), "&ndash;", .))) %>%
+  mutate(across(
+    c(penalty, mtry, trees, terms),
+    ~ ifelse(is.na(.), "&ndash;", .)
+  )) %>%
   mutate(mean = format(round(mean, digits = 3L), digits = 3L, nsmall = 1L)) %>%
   select(
     Measure = .metric, Model = model, Predictors = predictors,
-    penalty, mtry, trees,
+    penalty, mtry, trees, terms,
     `Mean performance` = mean
   ) %>%
   arrange(Measure, Model, Predictors) %>%
-  knitr::kable(align = "lllrrrr")
+  knitr::kable(align = "lllrrrrr")
 ```
 
-The high accuracy rates are largely artifacts of the imbalance in the data; the ROC curves provide a more discriminating measure of performance. These are used below to visually compare performance between the model families and specifications.
-Remember that performance in each setting is an average taken over 6-fold cross-validation, from which we derive compatibility intervals.
+While high accuracy tends to be achieved by more parsimonious models, overall performance as measured by AUROC is improved with larger models.
+It is likely that the high accuracy rates are largely artifacts of the imbalance in the data; the ROC curves provide a more discriminating measure of performance. These are used below to visually compare performance between the model families and specifications.
+Remember that performance in each setting is an average taken over folded cross-validation, from which we derive compatibility intervals.
 
-```{r optimal performance plot, fig.height=3}
+```{r optimal performance plot, fig.height=4}
 aatd_opt %>%
   filter(.metric == "AUROC") %>%
   mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
   mutate(formula = fct_rev(formula)) %>%
   ggplot(aes(x = mean, xmin = mean - 2*sd, xmax = mean + 2*sd, y = formula)) +
   facet_grid(model ~ .) +
+  geom_vline(xintercept = 0.5, linetype = "dashed") +
   geom_pointrange() +
   labs(x = "AUROC", y = NULL)
 ```
 
-Logistic regression clearly provides greater performance in this setting.
+Logistic regression models clearly achieve greater performance in this setting than random forest models, which are only marginally better than chance.
+Meanwhile, FasterRisk yields models that are competitive with LR models, in the sense that FR may be expected to outperform LR on new data much (though not necessarily most) of the time.
+Because they are already interpretable, i believe FR models provide the most promising family for the final risk score.
 
 ## Selection of optimized model
 
-A remaining question is whether the inclusion of smoking history provides detectable improvement in the model.
-We could perform a likelihood ratio test of the null hypothesis that the model with smoking history outperforms the model without, or use the Akaike Information Criterion to quantify the trade-off between predictive performance and model complexity.
+The only additional predictor that improves both LR and FR models is smoking history, and the improvement appears to be substantial.
+This could be carefully tested in the LR models via a likelihood ratio test of the null hypothesis that the model with smoking history outperforms the model without, or by using the Akaike Information Criterion to quantify the trade-off between predictive performance and model complexity.
+The answer is less straightforward for the FR models.
+
+Finally, whether a LR or FR model is selected for the final risk score, we must decide how sparse to require it. This amounts to choosing a complexity penalty for the LR model or to choosing a term limit and coefficient range for the FR model.
