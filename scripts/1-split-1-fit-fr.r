@@ -40,7 +40,6 @@ vars_response <- list(
 )
 
 # `FasterRisk` settings
-# TODO: ask how the following parameters are used
 n_terms <- 7L
 n_models <- 6L
 abs_bound <- 5
@@ -49,8 +48,8 @@ n_mults <- 24L
 
 #' Result tables
 
-aatd_rf_res_metric <- tibble()
-aatd_rf_res_pred <- tibble()
+aatd_fr_res_metric <- tibble()
+aatd_fr_res_pred <- tibble()
 
 # load data and subset to a fixed stratified sample for all experiments
 set.seed(seed)
@@ -197,7 +196,7 @@ for (i_model in seq(n_models)) {
     # restore factor levels
     mutate(across(
       c(.pred_class, geno_class),
-      ~ factor(ifelse(. == 1L, "Normal", "Abnormal"))
+      ~ factor(ifelse(. == 1L, "Normal", "Abnormal"), c("Abnormal", "Normal"))
     )) ->
     aatd_fr_res
   
@@ -207,20 +206,20 @@ for (i_model in seq(n_models)) {
     mutate(model = str_c("FasterRisk ", i_model),
            predictors = pred, response = resp) %>%
     select(response, predictors, model, everything()) ->
-    aatd_rf_res_metric_i
-  aatd_rf_res_metric <- bind_rows(aatd_rf_res_metric, aatd_rf_res_metric_i)
+    aatd_fr_res_metric_i
+  aatd_fr_res_metric <- bind_rows(aatd_fr_res_metric, aatd_fr_res_metric_i)
   # write to data file
-  write_rds(aatd_rf_res_metric, here::here("data/aatd-1-rf-metric.rds"))
+  write_rds(aatd_fr_res_metric, here::here("data/aatd-1-fr-metric.rds"))
   
   # prediction tables
   aatd_fr_res %>%
     mutate(model = str_c("FasterRisk ", i_model),
            predictors = pred, response = resp) %>%
     select(response, predictors, model, everything()) ->
-    aatd_rf_res_pred_i
-  aatd_rf_res_pred <- bind_rows(aatd_rf_res_pred, aatd_rf_res_pred_i)
+    aatd_fr_res_pred_i
+  aatd_fr_res_pred <- bind_rows(aatd_fr_res_pred, aatd_fr_res_pred_i)
   # write to data file
-  write_rds(aatd_rf_res_pred, here::here("data/aatd-1-rf-pred.rds"))
+  write_rds(aatd_fr_res_pred, here::here("data/aatd-1-fr-pred.rds"))
   
 }
 

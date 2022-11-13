@@ -61,24 +61,52 @@ aatd_met <- metric_set(accuracy, roc_auc, pr_auc)
 #' Model specifications
 
 # `FasterRisk` settings
-# TODO: ask how the following parameters are used
-n_terms <- 7L
-n_models <- 6L
-abs_bound <- 5
+# n_terms <- 7L
+n_models <- 2L
+# abs_bound <- 5
 n_retain <- 12L
 n_mults <- 24L
 
+# tuning restrictions
+read_rds(here::here("data/aatd-pred.rds")) %>%
+  # all predictors from any specification
+  select(unique(unlist(sapply(vars_predictors, eval)))) %>%
+  ncol() ->
+  n_pred
+ns_terms <- seq(5L, ceiling(3/4 * n_pred), length.out = 3L)
+abs_bounds <- c(3, 5, 7)
+
+# read in existing data
 aatd_metrics <- if (file.exists(here::here("data/aatd-2-fr-eval.rds"))) {
-  read_rds(here::here("data/aatd-2-fr-eval.rds"))
+  here::here("data/aatd-2-fr-eval.rds") %>%
+    read_rds() %>%
+    group_by(predictors, response, .metric) %>%
+    add_count(name = "count") %>%
+    ungroup() %>%
+    filter(count == max(count))
 } else {
   tibble()
 }
+
+# check assumption
+if (nrow(aatd_metrics) > 0L)
+  stopifnot(all(aatd_metrics$count ==
+                  n_folds_2 * n_models * length(ns_terms) * length(abs_bounds)))
 
 for (i_pred in seq_along(vars_predictors)) {#LOOP
 for (i_resp in seq_along(vars_response)) {#LOOP
 
 pred <- names(vars_predictors)[[i_pred]]
 resp <- names(vars_response)[[i_resp]]
+
+# skip this loop if already done
+done <- if (nrow(aatd_metrics) == 0L) FALSE else {
+  aatd_metrics %>%
+    filter(predictors == pred & response == resp) %>%
+    nrow() %>%
+    as.logical()
+}
+if (done) next
 
 print("--------------------------------")
 print(str_c("Predictors: ", pred))
@@ -142,11 +170,18 @@ aatd_cv <- vfold_cv(aatd_data, v = n_folds_2, strata = geno_class)
 #' FasterRisk
 
 transmute(aatd_cv, id) %>%
+  mutate(fold = seq(n_folds_2)) %>%
+  crossing(terms = ns_terms, bound = abs_bounds) %>%
   mutate(metrics = vector(mode = "list", length = nrow(.))) ->
   aatd_fr_met
 
-for (i_fold in seq(n_folds_2)) {#LOOP
-# i_fold <- 1L
+for (r in seq(nrow(aatd_fr_met))) {#LOOP
+# r <- 1L
+
+# set parameters from data frame
+i_fold <- aatd_fr_met$fold[[r]]
+n_terms <- aatd_fr_met$terms[[r]]
+abs_bound <- aatd_fr_met$bound[[r]]
 
 # obtain training and testing sets
 aatd_train <- bake(aatd_int_rec, training(aatd_cv$splits[[i_fold]]))
@@ -175,7 +210,7 @@ aatd_test %>%
   y_test
 
 # specify model
-rso <- fr$RiskScoreOptimizer(
+aatd_rso <- fr$RiskScoreOptimizer(
   X = X_train, y = y_train,
   k = n_terms, select_top_m = n_models,
   lb = -abs_bound, ub = abs_bound,
@@ -183,10 +218,11 @@ rso <- fr$RiskScoreOptimizer(
 )
 
 # optimize model
-rso$optimize()
+aatd_rso$optimize()
 
-# save results
-aatd_rso_res <- rso$get_models()
+# save results and destroy optimizer
+aatd_rso_res <- aatd_rso$get_models()
+rm(aatd_rso)
 
 #' Evaluation and comparison of models
 
@@ -210,11 +246,7 @@ for (i_model in seq(n_models)) {
     # restore factor levels
     mutate(across(
       c(.pred_class, geno_class),
-      ~ factor(ifelse(. == 1L, "Normal", "Abnormal"))
-    )) %>%
-    mutate(across(
-      c(.pred_class, geno_class),
-      ~ factor(., c("Normal", "Abnormal"))
+      ~ factor(ifelse(. == 1L, "Normal", "Abnormal"), c("Abnormal", "Normal"))
     )) ->
     aatd_fr_res
   
@@ -222,21 +254,27 @@ for (i_model in seq(n_models)) {
   aatd_fr_res %>%
     metrics(truth = geno_class, estimate = .pred_class, .pred_Abnormal) %>%
     mutate(
-      model = "FasterRisk", number = i_model,
-      predictors = pred, response = resp
+      model = "FasterRisk",
+      predictors = pred, response = resp,
+      number = i_model
     ) ->
     aatd_fr_fold_met_i
   aatd_fr_fold_met <- bind_rows(aatd_fr_fold_met, aatd_fr_fold_met_i)
   
 }
 
-aatd_fr_met$metrics[[i_fold]] <- aatd_fr_fold_met
+aatd_fr_met$metrics[[r]] <- aatd_fr_fold_met
 
 }#LOOP
 
 aatd_fr_met %>%
   unnest(metrics) %>%
-  write_rds(here::here("data/aatd-2-fr-eval.rds"))
+  select(model, predictors, response, terms, id, number, everything()) ->
+  aatd_fr_met
+
+aatd_metrics <- bind_rows(aatd_metrics, aatd_fr_met)
+
+write_rds(aatd_metrics, here::here("data/aatd-2-fr-eval.rds"))
 
 }#LOOP
 }#LOOP

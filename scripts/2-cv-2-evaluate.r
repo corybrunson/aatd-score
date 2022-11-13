@@ -2,19 +2,29 @@ library(tidyverse)
 
 # read in evaluation data
 read_rds(here::here("data/aatd-eval.rds")) %>%
+# read_rds(here::here("data/aatd-2-eval.rds")) %>%
   mutate(across(c(model, predictors, response), fct_inorder)) %>%
   print() ->
-  aatd_metrics
+  aatd_ml_metrics
+read_rds(here::here("data/aatd-2-fr-eval.rds")) %>%
+  mutate(across(c(model, predictors, response), fct_inorder)) %>%
+  print() ->
+  aatd_fr_metrics
 
 # check for duplicates
-aatd_metrics %>%
+aatd_ml_metrics %>%
   unnest(hyperparameters) %>%
   count(predictors, response, model, .metric, .estimator, name = "count") %>%
   count(predictors, response, model, count, name = "n")
+# remind self of numbers of models obtained
+aatd_fr_metrics %>%
+  distinct(predictors, response, terms, number) %>%
+  count(predictors, response, terms)
 
 # compare accuracy across hyperparameter settings
-aatd_metrics %>%
-  unnest(hyperparameters) %>%
+aatd_ml_metrics %>%
+  bind_rows(aatd_fr_metrics) %>%
+  unnest(hyperparameters, keep_empty = TRUE) %>%
   group_by_at(vars(-id, -.estimate)) %>%
   summarize(mean = mean(.estimate), .groups = "drop") %>%
   filter(.metric == "accuracy") %>%
@@ -27,8 +37,15 @@ aatd_metrics %>%
 # choice of response is determinative; need to compare models of same response
 
 # compare AUROC across hyperparameter settings
-aatd_metrics %>%
-  unnest(hyperparameters) %>%
+aatd_ml_metrics %>%
+  bind_rows(aatd_fr_metrics) %>%
+  unnest(hyperparameters, keep_empty = TRUE) %>%
+  mutate(model = ifelse(
+    model == "FasterRisk",
+    str_c(model, " ", terms),
+    as.character(model)
+  )) %>%
+  mutate(model = fct_inorder(model)) %>%
   group_by_at(vars(-id, -.estimate)) %>%
   summarize(mean = mean(.estimate), .groups = "drop") %>%
   filter(.metric == "roc_auc") %>%
@@ -40,9 +57,16 @@ aatd_metrics %>%
   labs(x = "AUROC", y = "Predictors -> Response")
 
 # compare accuracy across hyperparameter settings: ZZ (greatest accuracy)
-aatd_metrics %>%
+aatd_ml_metrics %>%
+  bind_rows(aatd_fr_metrics) %>%
   filter(response == "ZZ") %>%
-  unnest(hyperparameters) %>%
+  unnest(hyperparameters, keep_empty = TRUE) %>%
+  mutate(model = ifelse(
+    model == "FasterRisk",
+    str_c(model, " ", terms),
+    as.character(model)
+  )) %>%
+  mutate(model = fct_inorder(model)) %>%
   group_by_at(vars(-id, -.estimate)) %>%
   summarize(mean = mean(.estimate)) %>%
   filter(.metric == "accuracy") %>%
@@ -56,13 +80,20 @@ aatd_metrics %>%
 # performance
 
 # best parameter settings for each model and formula by two measures
-aatd_metrics %>%
+aatd_ml_metrics %>%
+  bind_rows(aatd_fr_metrics) %>%
   filter(.metric == "accuracy" | .metric == "roc_auc") %>%
+  mutate(model = ifelse(
+    model == "FasterRisk",
+    str_c(model, " ", terms),
+    as.character(model)
+  )) %>%
+  mutate(model = fct_inorder(model)) %>%
   group_by_at(vars(-id, -.estimate)) %>%
   summarize(mean = mean(.estimate), sd = sd(.estimate), .groups = "drop") %>%
   group_by(model, predictors, response, .metric) %>%
   filter(mean == max(mean)) %>%
-  unnest(hyperparameters) %>%
+  unnest(hyperparameters, keep_empty = TRUE) %>%
   mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
   mutate(formula = fct_rev(formula)) %>%
   ggplot(aes(x = mean, xmin = mean - 2*sd, xmax = mean + 2*sd, y = formula)) +
@@ -71,7 +102,7 @@ aatd_metrics %>%
 # logistic regression achieves more robust (AUROC) performance
 
 # track logistic regression performance across penalties
-aatd_metrics %>%
+aatd_ml_metrics %>%
   filter(model == "logistic regression" & .metric == "roc_auc") %>%
   group_by_at(vars(-id, -.estimate)) %>%
   summarize(mean = mean(.estimate), sd = sd(.estimate), .groups = "drop") %>%
@@ -88,6 +119,34 @@ aatd_metrics %>%
   ) +
   scale_x_continuous(trans = "log", breaks = 10 ^ seq(-9, 0))
 # tobacco use obtains greatest predictive value for each response
+
+# compare FasterRisk models
+aatd_fr_metrics %>%
+  filter(.metric == "roc_auc") %>%
+  group_by_at(vars(-id, -fold, -.estimate)) %>%
+  summarize(mean = mean(.estimate), sd = sd(.estimate), .groups = "drop") %>%
+  # number models according to performance
+  group_by_at(vars(-number, -mean, -sd)) %>%
+  mutate(number = rank(desc(mean), ties.method = "random")) %>%
+  ungroup() %>%
+  mutate(number = fct_rev(factor(number))) %>%
+  ggplot(aes(x = mean, xmin = mean - 2*sd, xmax = mean + 2*sd, y = number)) +
+  facet_grid(rows = vars(predictors, terms), cols = vars(response)) +
+  geom_pointrange()
+
+# compare FasterRisk models
+aatd_fr_metrics %>%
+  filter(.metric == "roc_auc") %>%
+  group_by_at(vars(-id, -fold, -number, -.estimate)) %>%
+  summarize(mean = mean(.estimate), sd = sd(.estimate), .groups = "drop") %>%
+  mutate(terms = fct_rev(factor(terms, sort(unique(terms))))) %>%
+  # unite("model", model, number, sep = " ") %>%
+  # mutate(model = fct_rev(factor(model))) %>%
+  # mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
+  # mutate(formula = fct_rev(formula)) %>%
+  ggplot(aes(x = mean, xmin = mean - 2*sd, xmax = mean + 2*sd, y = terms)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  geom_pointrange()
 
 stop("Below lies code for an older version of the results data.")
 

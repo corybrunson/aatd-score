@@ -22,10 +22,10 @@ read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_pred
-read_rds(here::here(str_c("data/aatd-1-rf-pred-", sample_denom, ".rds"))) %>%
+read_rds(here::here(str_c("data/aatd-1-fr-pred-", sample_denom, ".rds"))) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
-  aatd_rf_res_pred
+  aatd_fr_res_pred
 
 pred <- "Dx"
 resp <- "ZZ"
@@ -45,13 +45,14 @@ aatd_mod_res_pred %>%
   ) +
   ggtitle(str_c(pred, "-based screen for ", resp)) ->
   aatd_roc
+print(aatd_roc)
 ggsave(
   here::here(str_c("fig/aatd-", tolower(pred), "-", tolower(resp), "-roc.pdf")),
   aatd_roc
 )
 
 # compare ROC curves of FR models
-aatd_rf_res_pred %>%
+aatd_fr_res_pred %>%
   filter(response == resp, predictors == pred) %>%
   select(-response, -predictors) %>%
   group_by(model) %>%
@@ -65,9 +66,10 @@ aatd_rf_res_pred %>%
   ) +
   ggtitle(str_c(pred, "-based screen for ", resp)) ->
   aatd_roc
+print(aatd_roc)
 ggsave(
   here::here(str_c(
-    "fig/aatd-", tolower(pred), "-", tolower(resp), "-rf-roc.pdf"
+    "fig/aatd-", tolower(pred), "-", tolower(resp), "-fr-roc.pdf"
   )),
   aatd_roc
 )
@@ -89,13 +91,14 @@ aatd_mod_res_pred %>%
   scale_y_continuous(trans = "log", breaks = breaks_log(base = 10)) +
   ggtitle(str_c(pred, "-based screen for ", resp)) ->
   aatd_pr
+print(aatd_pr)
 ggsave(
   here::here(str_c("fig/aatd-", tolower(pred), "-", tolower(resp), "-pr.pdf")),
   aatd_pr
 )
 
 # compare PR curves of FR models
-aatd_rf_res_pred %>%
+aatd_fr_res_pred %>%
   filter(response == resp, predictors == pred) %>%
   select(-response, -predictors) %>%
   group_by(model) %>%
@@ -111,6 +114,7 @@ aatd_rf_res_pred %>%
   scale_y_continuous(trans = "log", breaks = breaks_log(base = 10)) +
   ggtitle(str_c(pred, "-based screen for ", resp)) ->
   aatd_pr
+print(aatd_pr)
 ggsave(
   here::here(str_c(
     "fig/aatd-", tolower(pred), "-", tolower(resp), "-fr-pr.pdf"
@@ -127,7 +131,7 @@ best_models <- c(
 
 # compare ROC curves of best ML and best FR models
 aatd_mod_res_pred %>%
-  bind_rows(aatd_rf_res_pred) %>%
+  bind_rows(aatd_fr_res_pred) %>%
   filter(model %in% best_models) %>%
   mutate(model = fct_inorder(model)) %>%
   filter(response == resp, predictors == pred) %>%
@@ -143,6 +147,7 @@ aatd_mod_res_pred %>%
   ) +
   ggtitle(str_c(pred, "-based screen for ", resp)) ->
   aatd_roc
+print(aatd_roc)
 ggsave(
   here::here(str_c(
     "fig/aatd-", tolower(pred), "-", tolower(resp), "-best-roc.pdf"
@@ -152,7 +157,7 @@ ggsave(
 
 # compare PR curves of best ML and best FR models
 aatd_mod_res_pred %>%
-  bind_rows(aatd_rf_res_pred) %>%
+  bind_rows(aatd_fr_res_pred) %>%
   filter(model %in% best_models) %>%
   mutate(model = fct_inorder(model)) %>%
   filter(response == resp, predictors == pred) %>%
@@ -170,6 +175,7 @@ aatd_mod_res_pred %>%
   scale_y_continuous(trans = "log", breaks = breaks_log(base = 10)) +
   ggtitle(str_c(pred, "-based screen for ", resp)) ->
   aatd_pr
+print(aatd_pr)
 ggsave(
   here::here(str_c(
     "fig/aatd-", tolower(pred), "-", tolower(resp), "-best-pr.pdf"

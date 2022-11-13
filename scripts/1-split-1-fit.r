@@ -428,3 +428,5 @@ write_rds(c(i_pred, i_resp), here::here("data/aatd-1-split-ii.rds"))
 
 }#LOOP
 }#LOOP
+
+file.remove(here::here("data/aatd-1-split-ii.rds"))

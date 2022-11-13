@@ -74,7 +74,7 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
   select(unique(unlist(sapply(vars_predictors, eval)))) %>%
   ncol() ->
   n_pred
-trees_values <- 10 ^ seq(0, 2, by = .5)
+trees_values <- round(10 ^ seq(0, 2, by = .5))
 mtry_values <- c(
   round(n_pred ^ (1/3)),
   round(sqrt(n_pred))
@@ -167,7 +167,7 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
 #' Specify pre-processing recipes
 
 # prepare regression recipe
-recipe(training(aatd_split), geno_class ~ .) %>%
+recipe(aatd_data, geno_class ~ .) %>%
   # stop treating the ID as a predictor
   #update_role(record_id, new_role = "id variable") %>%
   step_rm(record_id, genotype) %>%
@@ -180,12 +180,13 @@ recipe(training(aatd_split), geno_class ~ .) %>%
   # linearly independent encoding of factors
   step_dummy(all_nominal_predictors(), one_hot = FALSE) %>%
   # binary encoding of logicals
+  # step_mutate_at(has_type(match = "logical"), fn = ~ . * 2L - 1L) %>%
   step_mutate_at(has_type(match = "logical"), fn = as.integer) %>%
   prep() ->
   aatd_reg_rec
 
 # prepare numeric recipe
-recipe(training(aatd_split), geno_class ~ .) %>%
+recipe(aatd_data, geno_class ~ .) %>%
   # stop treating the ID as a predictor
   #update_role(record_id, new_role = "id variable") %>%
   step_rm(record_id, genotype) %>%
@@ -194,6 +195,7 @@ recipe(training(aatd_split), geno_class ~ .) %>%
   # one-hot encoding of factors
   step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%
   # binary encoding of logicals
+  # step_mutate_at(has_type(match = "logical"), fn = ~ . * 2L - 1L) %>%
   step_mutate_at(has_type(match = "logical"), fn = as.integer) %>%
   prep() ->
   aatd_num_rec
@@ -313,6 +315,7 @@ for (i in rev(seq(nrow(aatd_rf_met)))) {
     set_mode("classification") %>%
     fit(geno_class ~ ., train_i) ->
     fit_i
+  # TODO: debug `predict()` calls for `i >= 13L`
   bind_cols(
     select(test_i, class = geno_class),
     predict(fit_i, new_data = test_i),
@@ -401,3 +404,5 @@ write_rds(c(i_pred, i_resp), here::here("data/aatd-2-cv-ii.rds"))
 
 }#LOOP
 }#LOOP
+
+file.remove(here::here("data/aatd-2-cv-ii.rds"))
