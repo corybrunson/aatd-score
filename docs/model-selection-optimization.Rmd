@@ -64,7 +64,18 @@ read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
   model_types
 ```
 
-For this phase, models were evaluated using a fixed sample of $\frac{1}{`r sample_denom`}$ of the data.
+For this phase, each model family was fitted using a fixed set of parameter specifications (**need to make defaults explicit**):
+
+* logistic regression: no penalty term
+* linear discriminant analysis: no penalty term
+* decision rules: 1 tree
+* decision tree: depth 6
+* random forest: 4 predictors, 120 trees
+* nearest neighbor: 360 neighbors, triangular weights
+* support vector machines: degree 1, 2, or 3
+* FasterRisk: 7 terms, coefficient bound 5, beam search retention 12, ray search multipliers 24
+
+Models were evaluated using a fixed sample of $\frac{1}{`r sample_denom`}$ of the data.
 The sample was stratified by a 4-way categorization of genotypes: ZZ, SZ, other non-MM, and MM. This was done in order to prevent significant changes in the balance of response values in each model.
 Models were fit on a \frac{2}{3} training set of this sample and evaluated on the remaining \frac{1}{3} testing set. This partition was also stratified by genotype, and the same partition was used across all evaluations.
 Since our goal in this phase was to identify generally over-performing models to optimize in the next phase, we used common or default parameter settings throughout.
@@ -288,24 +299,15 @@ Taken together, the ROC and PR curves favor logistic regression (and linear disc
 # Phase 2: Model optimization
 
 ```{r model optimization results}
-# read in evaluation data
-read_rds(here::here("data/aatd-2-eval.rds")) %>%
+# read in machine learning evaluation data
+read_rds(here::here("data/aatd-2-eval-ml.rds")) %>%
   mutate(across(c(model, predictors, response), fct_inorder)) %>%
-  mutate(.metric = fct_inorder(.metric)) %>%
-  mutate(.metric = fct_recode(
-    .metric,
-    kappa = "kap", `mean log loss` = "mn_log_loss", AUROC = "roc_auc"
-  )) ->
-  aatd_metrics
-# read in evaluation data
-read_rds(here::here("data/aatd-2-eval.rds")) %>%
-  mutate(across(c(model, predictors, response), fct_inorder)) ->
+  mutate(number = 1L) %>%
+  unnest(hyperparameters) ->
   aatd_ml_metrics
-# read_rds(here::here("data/aatd-2-fr-eval.rds")) %>%
-read_rds(here::here("data/aatd-2-fr-eval-old.rds")) %>%
-  mutate(across(c(model, predictors, response), fct_inorder)) %>%
-  group_by_at(vars(-id, -fold, -number)) %>%
-  summarize(.estimate = mean(.estimate), .groups = "drop") ->
+read_rds(here::here("data/aatd-2-eval-fr.rds")) %>%
+  select(-fold) %>%
+  mutate(across(c(model, predictors, response), fct_inorder)) ->
   aatd_fr_metrics
 ```
 
@@ -323,8 +325,8 @@ First, the FasterRisk program returns a collection of similarly-performing model
 
 ## Comparison of model families
 
-Across the same sets of predictors and responses as in Phase 1, we evaluated LR and RF models using 6-fold cross validation on the entire data set:
-For each 5--1 split of a 6-fold partition, models were _trained_ and _tuned_ on the $\frac{5}{6}$ part by identifying the parameter settings that obtained the best fit, then _tested_ on the remaining $\frac{1}{6}$.
+Across the same sets of predictors and responses as in Phase 1, we evaluated LR and RF models using 6-fold cross validation on a $\frac{4}{5}$ training set.
+Within this set, for each 5--1 split of a 6-fold partition, models were _trained_ and _tuned_ on the $\frac{5}{6}$ part by identifying the parameter settings that obtained the best fit, then _tested_ on the remaining $\frac{1}{6}$.
 Logistic regression models were tuned over 6 values of the penalty parameter ($10 ^ {-10}$ through $10 ^ 0$ with exponents at increments of $2$), which controls the cost of each additional predictor in the pruned model.
 Random forest models were tuned over 10 parameter settings: each combination of 5 numbers of trees ($1$ through $100$ at rounded powers of $\sqrt{10}$) and 2 numbers of predictors per tree ($p ^ {1/3} \approx 3$ and $\sqrt{p} \approx 4$, where $p$ is the total number of predictors).
 
@@ -334,6 +336,7 @@ It may be that allocation of more predictors or greater coefficient range would 
 We set out to determine whether this is the case.
 The fewest predictors available were 18 (lung and liver history only), whereas the most convenient risk scores include 5 or so items. We obtained risk scores using 5, 10, and 15 items each.
 We considered absolute coefficient bounds on either side of $5$, i.e. $3$ (yielding a Likert-style range from $-3$ to $3$) and $7$.
+The beam search retention and ray search multiplier parameters were held fixed at 8 and 16, respectively (lower than in the first phase in order to reduce runtime).
 For each combination of predictors, response, number of terms, and coefficient range, we sampled 2 generated risk scores.
 
 We focused on two performance measures: overall accuracy and AUROC.
@@ -347,8 +350,8 @@ As with the ML models, we fit FR models on the $\frac{5}{6}$ training data and e
 
 ### Range of performance across parameter settings
 
-The plot below locates the accuracy and AUROC of each fitted ZZ prediction model over a range of parameter settings for each model family.
-The results are separated by model family, model specification (predictors used), and evaluation measure.
+The plot below locates the mean accuracy and mean AUROC of the families of fitted ZZ prediction models over their respective parameter settings.
+The results are separated by model family, model specification (predictors used), and evaluation measure; each point is a mean of 6 (ML) or 12 (FR) within-fold evaluations.
 The logistic regression models varied the penalty parameter while the random forest models varied the number of predictors used in each tree and the number of trees in the forest.
 
 ```{r performance across parameters, fig.height=4.5}
@@ -356,9 +359,8 @@ The logistic regression models varied the penalty parameter while the random for
 aatd_ml_metrics %>%
   bind_rows(aatd_fr_metrics) %>%
   filter(response == "ZZ") %>%
-  unnest(hyperparameters, keep_empty = TRUE) %>%
   mutate(model = fct_inorder(model)) %>%
-  group_by_at(vars(-id, -.estimate)) %>%
+  group_by_at(vars(-id, -number, -.estimate)) %>%
   summarize(mean = mean(.estimate), .groups = "drop") %>%
   filter(.metric == "accuracy" | .metric == "roc_auc") %>%
   mutate(.metric = c(accuracy = "Accuracy", roc_auc = "AUROC")[.metric]) %>%
@@ -387,9 +389,8 @@ Among the FR models, only use history (not exposure history) provided substantia
 aatd_ml_metrics %>%
   bind_rows(aatd_fr_metrics) %>%
   filter(response == "ZZ") %>%
-  unnest(hyperparameters, keep_empty = TRUE) %>%
   mutate(model = fct_inorder(model)) %>%
-  group_by_at(vars(-id, -.estimate)) %>%
+  group_by_at(vars(-id, -number, -.estimate)) %>%
   summarize(mean = mean(.estimate), sd = sd(.estimate), .groups = "drop") %>%
   filter(.metric == "accuracy" | .metric == "roc_auc") %>%
   mutate(.metric = c(accuracy = "Accuracy", roc_auc = "AUROC")[.metric]) %>%
@@ -401,7 +402,8 @@ aatd_ml_metrics %>%
   mutate(param_pref = case_when(
     ! is.na(penalty) ~ rank(penalty),
     ! is.na(trees) ~ rank(desc(trees)),
-    ! is.na(terms) ~ rank(terms)
+    ! is.na(terms) ~ rank(terms),
+    ! is.na(bound) ~ rank(bound)
   )) %>%
   filter(param_pref == min(param_pref)) %>%
   ungroup() ->
@@ -426,7 +428,7 @@ aatd_opt %>%
   mutate(mean = format(round(mean, digits = 3L), digits = 3L, nsmall = 1L)) %>%
   select(
     Measure = .metric, Model = model, Predictors = predictors,
-    penalty, mtry, trees, terms,
+    penalty, mtry, trees, terms, bound,
     `Mean performance` = mean
   ) %>%
   arrange(Measure, Model, Predictors) %>%
@@ -449,9 +451,40 @@ aatd_opt %>%
   labs(x = "AUROC", y = NULL)
 ```
 
-Logistic regression models clearly achieve greater performance in this setting than random forest models, which are only marginally better than chance.
+Logistic regression models clearly achieve greater performance in this setting than random forest models, which are only marginally (though detectably) better than chance.
 Meanwhile, FasterRisk yields models that are competitive with LR models, in the sense that FR may be expected to outperform LR on new data much (though not necessarily most) of the time.
 Because they are already interpretable, i believe FR models provide the most promising family for the final risk score.
+
+### Sensitivity of FasterRisk models
+
+While the 15-term, large-coefficient FasterRisk models performed best, if performance is minimally impacted by tightening these allowances, then the gain to interpretability and usability may be worth it.
+Here we compare all nine FasterRisk parameter settings on the prediction of the ZZ genotype.
+On each fold, two models were obtained, yielding $6 \times 2 = 12$ models per parameter setting.
+
+```{r FasterRisk performance sensitivity, fig.height=4}
+aatd_fr_metrics %>%
+  filter(response == "ZZ" & .metric == "roc_auc") %>%
+  mutate(model = fct_inorder(model)) %>%
+  group_by_at(vars(-id, -number, -.estimate)) %>%
+  summarize(mean = mean(.estimate), se = sd(.estimate) / sqrt(n())) %>%
+  ungroup() %>%
+  mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
+  mutate(formula = fct_inorder(fct_drop(formula))) %>%
+  mutate(hyperparameters = str_c("terms = ", terms, ", bound = ", bound)) %>%
+  mutate(hyperparameters = fct_rev(fct_inorder(hyperparameters))) %>%
+  ggplot(aes(x = mean, xmin = mean - 2*se, xmax = mean + 2*se,
+             y = hyperparameters)) +
+  facet_wrap(facets = vars(formula)) +
+  # geom_vline(xintercept = 0.5, linetype = "dashed") +
+  geom_pointrange() +
+  labs(x = "AUROC", y = NULL)
+```
+
+It appears that the number of terms is more consequential than the point bounds, though we compared models using a smaller spread of the latter.
+We see improvements of between $0.012$ and $0.035$ from the strictest to the loosest parameter settings.
+We will need to decide whether additional terms or larger scores are warranted for a roughly 2% gain in AUROC---though the gains are smaller when using only medical history to predict genotype.
+
+# Phase 3: Model evaluation
 
 ## Selection of optimized model
 
@@ -460,3 +493,23 @@ This could be carefully tested in the LR models via a likelihood ratio test of t
 The answer is less straightforward for the FR models.
 
 Finally, whether a LR or FR model is selected for the final risk score, we must decide how sparse to require it. This amounts to choosing a complexity penalty for the LR model or to choosing a term limit and coefficient range for the FR model.
+
+## Obtaining risk scores from optimized models
+
+FasterRisk provides ready-made risk scores; no further processing needs to be done.
+Risk scores can be calculated by adding small integer multiples of the categorical attributes and then mapping these scores to their associated risk estimates (probabilities of abnormal genotype).
+
+The linear regression model will undergo the following steps, adapted from Sullivan &al (2004):
+
+1. Reference values will be defined for all predictors (for medical history, these will be 0, i.e. no diagnosis). A baseline risk estimate will be established for cases that take all reference values. (This corresponds to the intercept in the logistic regression model.)
+2. A maximum point value for any predictor will be decided. The tentative choice is 25. This will cap the value of the coefficients used in the calculation of the risk score. Larger values will allow more predictors to appear in the risk score and more granularity in its risk estimates; smaller values will make calculations easier.
+3. All coefficients will be multiplied and rounded, so that the largest value is the maximum point value. This obtains the point values. Predictors whose coefficients round to zero will be excluded from the risk score.
+4. Each score $s$ (the point total) will be mapped to a risk estimate $p$ (a probability) via the link function that defines the logistic regression model:
+$$p = \frac{1}{1 + \exp(s)}$$
+
+## Final evaluation
+
+The selected model family and hyperparameters will be evaluated by first fitting them to the entire $\frac{4}{5}$ training set from the second phase and then evaluating its predictions on the remaining $\frac{1}{5}$ testing set.
+This will provide our best estimate for the performance of the final model on new data (of the same type as the data already collected). Remember that this is, by definition, data we do not currently have.
+
+The final model will then be obtained by fitting the same family and hyperparameters to _the entire data set_. This final model cannot be evaluated using our data but will provide our best proposal for a general risk score.

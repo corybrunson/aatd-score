@@ -1,4 +1,3 @@
-
 library(tidyverse)
 library(tidymodels)
 library(reticulate)
@@ -12,47 +11,6 @@ source(here::here("code/settings.r"))
 # genotypes to include in analysis
 genotype_incl <- read_rds(here::here("data/genotype-incl.rds"))
 
-# model specifications as tidy selections
-vars_predictors <- list(
-  Dx = expr(c(starts_with("lung_"), starts_with("liver_"))),
-  # `Dx+age` =
-  #   expr(c(contains("age_guess"), contains("receipt_date"),
-  #          starts_with("lung_"), starts_with("liver_"))),
-  # `Dx+tobacco` =
-  #   expr(c(contains("smoking_history_cigarette"),
-  #          # contains("any_tobacco_exposure"),
-  #          starts_with("lung_"), starts_with("liver_"))),
-  `Dx+smoke hx` = expr(c(contains("smoking_hx"),
-                         starts_with("lung_"), starts_with("liver_"))),
-  `Dx+smoke use` = expr(c(contains("smoking_use"),
-                          starts_with("lung_"), starts_with("liver_"))),
-  `Dx+gender` =
-    expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_")))
-)
-
-# response variables as logical tests
-vars_response <- list(
-  ZZ = expr(genotype == "ZZ"),
-  SZ = expr(genotype == "SZ" | genotype == "ZZ"),
-  # MZ = expr(genotype == "MZ" | genotype == "SZ" | genotype == "ZZ"),
-  # Z = expr(grepl(".*Z$", genotype)),
-  Ab = expr(genotype != "MM")
-)
-
-#' Subset data
-
-read_rds(here::here("data/aatd-pred.rds")) %>%
-  sample_frac(size = p_data_2) %>%
-  # all predictors from any specification
-  select(record_id, unique(unlist(sapply(vars_predictors, eval)))) %>%
-  # drop any cases with missing values
-  drop_na() %>%
-  # filter missing gender
-  filter(gender != "(Missing)") %>%
-  # store `record_id`
-  select(record_id) ->
-  elig_ids
-
 #' Evaluation measures
 
 # measures to calculate
@@ -64,8 +22,8 @@ aatd_met <- metric_set(accuracy, roc_auc, pr_auc)
 # n_terms <- 7L
 n_models <- 2L
 # abs_bound <- 5
-n_retain <- 12L
-n_mults <- 24L
+n_retain <- 8L
+n_mults <- 16L
 
 # tuning restrictions
 read_rds(here::here("data/aatd-pred.rds")) %>%
@@ -77,8 +35,8 @@ ns_terms <- seq(5L, ceiling(3/4 * n_pred), length.out = 3L)
 abs_bounds <- c(3, 5, 7)
 
 # read in existing data
-aatd_metrics <- if (file.exists(here::here("data/aatd-2-fr-eval.rds"))) {
-  here::here("data/aatd-2-fr-eval.rds") %>%
+aatd_metrics <- if (file.exists(here::here("data/aatd-2-eval-fr.rds"))) {
+  here::here("data/aatd-2-eval-fr.rds") %>%
     read_rds() %>%
     group_by(predictors, response, .metric) %>%
     add_count(name = "count") %>%
@@ -119,8 +77,8 @@ print("--------------------------------")
 read_rds(here::here("data/aatd-pred.rds")) %>%
   # predictors from current specification
   select(record_id, eval(vars_predictors[[i_pred]])) %>%
-  # eligible records
-  semi_join(elig_ids, by = "record_id") %>%
+  # restrict to training set
+  semi_join(read_rds(here::here("data/aatd-2-train.rds")), by = "record_id") %>%
   # remove empty factor levels
   mutate(across(where(is.factor), fct_drop)) ->
   aatd_data
@@ -274,7 +232,7 @@ aatd_fr_met %>%
 
 aatd_metrics <- bind_rows(aatd_metrics, aatd_fr_met)
 
-write_rds(aatd_metrics, here::here("data/aatd-2-fr-eval.rds"))
+write_rds(aatd_metrics, here::here("data/aatd-2-eval-fr.rds"))
 
 }#LOOP
 }#LOOP

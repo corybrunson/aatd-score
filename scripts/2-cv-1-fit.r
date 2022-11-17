@@ -20,47 +20,6 @@ source(here::here("code/settings.r"))
 # genotypes to include in analysis
 genotype_incl <- read_rds(here::here("data/genotype-incl.rds"))
 
-# model specifications as tidy selections
-vars_predictors <- list(
-  Dx = expr(c(starts_with("lung_"), starts_with("liver_"))),
-  # `Dx+age` =
-  #   expr(c(contains("age_guess"), contains("receipt_date"),
-  #          starts_with("lung_"), starts_with("liver_"))),
-  # `Dx+tobacco` =
-  #   expr(c(contains("smoking_history_cigarette"),
-  #          # contains("any_tobacco_exposure"),
-  #          starts_with("lung_"), starts_with("liver_"))),
-  `Dx+smoke hx` = expr(c(contains("smoking_hx"),
-                         starts_with("lung_"), starts_with("liver_"))),
-  `Dx+smoke use` = expr(c(contains("smoking_use"),
-                          starts_with("lung_"), starts_with("liver_"))),
-  `Dx+gender` =
-    expr(c(contains("gender"), starts_with("lung_"), starts_with("liver_")))
-)
-
-# response variables as logical tests
-vars_response <- list(
-  ZZ = expr(genotype == "ZZ"),
-  SZ = expr(genotype == "SZ" | genotype == "ZZ"),
-  # MZ = expr(genotype == "MZ" | genotype == "SZ" | genotype == "ZZ"),
-  # Z = expr(grepl(".*Z$", genotype)),
-  Ab = expr(genotype != "MM")
-)
-
-#' Subset data
-
-read_rds(here::here("data/aatd-pred.rds")) %>%
-  sample_frac(size = p_data_2) %>%
-  # all predictors from any specification
-  select(record_id, unique(unlist(sapply(vars_predictors, eval)))) %>%
-  # filter missing gender
-  filter(gender != "(Missing)") %>%
-  # drop any cases with missing values
-  drop_na() %>%
-  # store `record_id`
-  select(record_id) ->
-  elig_ids
-
 #' Evaluation measures
 
 # measures to calculate
@@ -113,8 +72,8 @@ ii <- if (file.exists(here::here("data/aatd-cv-ii.rds"))) {
 } else {
   c(0L, 0L)
 }
-aatd_metrics <- if (file.exists(here::here("data/aatd-2-eval.rds"))) {
-  read_rds(here::here("data/aatd-2-eval.rds"))
+aatd_metrics <- if (file.exists(here::here("data/aatd-2-eval-ml.rds"))) {
+  read_rds(here::here("data/aatd-2-eval-ml.rds"))
 } else {
   tibble()
 }
@@ -138,10 +97,8 @@ print("--------------------------------")
 read_rds(here::here("data/aatd-pred.rds")) %>%
   # predictors from current specification
   select(record_id, eval(vars_predictors[[i_pred]])) %>%
-  # remove missing values
-  drop_na() %>%
-  # eligible records
-  semi_join(elig_ids, by = "record_id") %>%
+  # restrict to training set
+  semi_join(read_rds(here::here("data/aatd-2-train.rds")), by = "record_id") %>%
   # remove empty factor levels
   mutate(across(where(is.factor), fct_drop)) ->
   aatd_data
@@ -399,7 +356,7 @@ aatd_metrics <- bind_rows(aatd_metrics, aatd_rf_met)
 #   aatd_nn_met
 # aatd_metrics <- bind_rows(aatd_metrics, aatd_nn_met)
 
-write_rds(aatd_metrics, here::here("data/aatd-2-eval.rds"))
+write_rds(aatd_metrics, here::here("data/aatd-2-eval-ml.rds"))
 write_rds(c(i_pred, i_resp), here::here("data/aatd-2-cv-ii.rds"))
 
 }#LOOP

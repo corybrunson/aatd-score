@@ -1,12 +1,12 @@
 library(tidyverse)
 
 # read in evaluation data
-read_rds(here::here("data/aatd-eval.rds")) %>%
+read_rds(here::here("data/aatd-2-eval-ml.rds")) %>%
 # read_rds(here::here("data/aatd-2-eval.rds")) %>%
   mutate(across(c(model, predictors, response), fct_inorder)) %>%
   print() ->
   aatd_ml_metrics
-read_rds(here::here("data/aatd-2-fr-eval.rds")) %>%
+read_rds(here::here("data/aatd-2-eval-fr.rds")) %>%
   mutate(across(c(model, predictors, response), fct_inorder)) %>%
   print() ->
   aatd_fr_metrics
