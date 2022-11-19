@@ -480,7 +480,7 @@ aatd_fr_metrics %>%
   labs(x = "AUROC", y = NULL)
 ```
 
-It appears that the number of terms is more consequential than the point bounds, though we compared models using a smaller spread of the latter.
+It appears that the number of terms is more consequential than the point bounds, though we compared models using a smaller spread of the latter. (The bounds seem more important when predicting genotype either SZ or ZZ in contrast to others.)
 We see improvements of between $0.012$ and $0.035$ from the strictest to the loosest parameter settings.
 We will need to decide whether additional terms or larger scores are warranted for a roughly 2% gain in AUROC---though the gains are smaller when using only medical history to predict genotype.
 
