@@ -32,7 +32,7 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
   ncol() ->
   n_pred
 ns_terms <- seq(5L, ceiling(3/4 * n_pred), length.out = 3L)
-abs_bounds <- c(3, 5, 7)
+abs_bounds <- c(2, 6, 10)
 
 # read in existing data
 aatd_metrics <- if (file.exists(here::here("data/aatd-2-eval-fr.rds"))) {
