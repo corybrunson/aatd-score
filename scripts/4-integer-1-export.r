@@ -104,7 +104,7 @@ recipe(aatd_data, geno_class ~ .) %>%
   #update_role(record_id, new_role = "id variable") %>%
   step_rm(record_id, genotype) %>%
   # one-hot encoding of factors
-  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%
+  step_dummy(all_nominal_predictors(), one_hot = FALSE) %>%
   # binary encoding of logicals
   step_mutate_at(has_type(match = "logical"), fn = as.integer) %>%
   # -1/1 encoding of response

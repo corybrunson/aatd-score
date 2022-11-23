@@ -20,15 +20,18 @@ n_retain_fix <- 12L
 n_mults_fix <- 24L
 
 # optimized hyperparameters
-stop("Choose these hyperparameter values based on the CV results.")
+warning("Choose these hyperparameter values based on the CV results.")
 penalty_opt <- 10^(-10)
-# n_terms_opt <- 6L
-# abs_bound_opt <- 5
+n_terms_opt <- c(7L, 10L)
+abs_bound_opt <- c(6L, 25L, 100L)
+
+#' Model specifications
+
+# restrict to models of interest
+vars_predictors <- vars_predictors[c("Dx", "Dx+smoke use")]
+vars_response <- vars_response[c("ZZ")]
 
 #' Evaluation measures
-
-# measures to calculate
-aatd_met <- metric_set(accuracy, roc_auc, pr_auc)
 
 for (i_pred in seq_along(vars_predictors)) {#LOOP
 for (i_resp in seq_along(vars_response)) {#LOOP
@@ -58,7 +61,7 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
       eval(vars_response[[i_resp]]),
       "Abnormal", "Normal"
     ),
-    # make abnormal genotype the first factor level (outcome)
+    # make abnormal genotype the second factor level
     geno_class = factor(geno_class, c("Abnormal", "Normal"))
   ) %>%
   # remove missing responses
@@ -86,7 +89,7 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
       eval(vars_response[[i_resp]]),
       "Abnormal", "Normal"
     ),
-    # make abnormal genotype the first factor level (outcome)
+    # make abnormal genotype the second factor level
     geno_class = factor(geno_class, c("Abnormal", "Normal"))
   ) %>%
   # remove missing responses
@@ -112,6 +115,8 @@ recipe(aatd_train, geno_class ~ .) %>%
   # binary encoding of logicals
   # step_mutate_at(has_type(match = "logical"), fn = ~ . * 2L - 1L) %>%
   step_mutate_at(has_type(match = "logical"), fn = as.integer) %>%
+  # reorder factors for fit
+  step_mutate_at(all_outcomes(), fn = ~ factor(., c("Normal", "Abnormal"))) %>%
   prep() ->
   aatd_reg_rec
 
@@ -120,106 +125,235 @@ recipe(aatd_train, geno_class ~ .) %>%
   # stop treating the ID as a predictor
   #update_role(record_id, new_role = "id variable") %>%
   step_rm(record_id, genotype) %>%
+  # remove redundant lung & liver categories
+  step_rm(ends_with("_none")) %>%
   # one-hot encoding of factors
-  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%
+  step_dummy(all_nominal_predictors(), one_hot = FALSE) %>%
   # binary encoding of logicals
   step_mutate_at(has_type(match = "logical"), fn = as.integer) %>%
   # -1/1 encoding of response
   step_mutate_at(
     has_role(match = "outcome"),
-    fn = ~ ifelse(. == "Abnormal", -1L, 1L)
+    # (CHANGED)
+    fn = ~ ifelse(. == "Abnormal", 1L, -1L)
   ) %>%
   prep() ->
   aatd_int_rec
 
-#' Evaluate ML-based risk score
+#' Evaluate COPD model
+
+# calculate proportions of abnormal genotypes by COPD
+aatd_train %>%
+  group_by(geno_class, lung_hx_copd) %>%
+  count(name = "count") %>%
+  ungroup() %>%
+  pivot_wider(lung_hx_copd, names_from = geno_class, values_from = count) %>%
+  rowwise() %>%
+  transmute(
+    score = as.integer(lung_hx_copd),
+    .pred_Normal = Normal / (Abnormal + Normal),
+    .pred_Abnormal = Abnormal / (Abnormal + Normal)
+  ) %>%
+  mutate(risk = .pred_Abnormal) ->
+  aatd_copd_pred_tab
+
+# evaluate COPD as a predictor
+aatd_train %>%
+  transmute(screen = lung_hx_copd, test = geno_class == "Abnormal") %>%
+  count(screen, test, name = "count") %>%
+  mutate(quadrant = case_when(
+    screen & test ~ "TP",
+    ! screen & ! test ~ "TN",
+    screen & ! test ~ "FP",
+    ! screen & test ~ "FN"
+  )) %>%
+  pivot_wider(id_cols = c(), names_from = quadrant, values_from = count) %>%
+  transmute(
+    sensitivity = TP / (TP + FN),
+    specificity = TN / (TN + FP),
+    precision = TP / (TP + FP),
+    recall = sensitivity
+  ) ->
+  aatd_copd_table
+
+# predictions for testing data
+aatd_test %>%
+  transmute(class = geno_class, score = as.integer(lung_hx_copd)) %>%
+  left_join(aatd_copd_pred_tab, by = "score") ->
+  aatd_copd_pred
+
+aatd_copd_pred %>%
+  # pull(class) %>% levels()
+  # NB: specify which level is the 'event'
+  roc_curve(truth = class, .pred_Abnormal, event_level = "first") ->
+  aatd_copd_roc
+aatd_copd_roc %>%
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  coord_equal() +
+  geom_path() +
+  geom_abline(intercept = 1, slope = -1, lty = 3)
+aatd_copd_roc %>%
+  slice_min(abs(specificity - aatd_copd_table$specificity), n = 1L) %>%
+  as_tibble() ->
+  aatd_copd_cut
+
+# metric tables
+aatd_copd_pred %>%
+  mutate(.pred_class = factor(
+    ifelse(score == 0, "Normal", "Abnormal"),
+    levels = levels(class)
+  )) %>%
+  metrics(truth = class, estimate = .pred_class, .pred_Abnormal) ->
+  aatd_copd_met
+
+# initialize results tibble
+eval_data <- tibble(
+  referent_risk = 0,
+  point_vals = list(c(lung_hx_copd = 1)),
+  score_risk = list(select(aatd_copd_pred_tab, score, risk = .pred_Abnormal)),
+  predictions = list(aatd_copd_pred),
+  cutoff = list(aatd_copd_cut),
+  metrics = list(aatd_copd_met)
+)
+
+#' Evaluate logistic regression-based risk score
+
+aatd_train_reg <- bake(aatd_reg_rec, new_data = aatd_train)
+aatd_test_reg <- bake(aatd_reg_rec, new_data = aatd_test)
 
 # fit logistic regression model
 logistic_reg(penalty = penalty_opt, mixture = mixture_fix) %>%
   set_engine("glmnet") %>%
   set_mode("classification") %>%
-  fit(geno_class ~ ., bake(aatd_reg_rec, new_data = aatd_train)) ->
+  fit(geno_class ~ ., aatd_train_reg) ->
   aatd_lr_fit
 
 # get referent risk factor profile (non-Dx, non-smoke, female)
-bake(aatd_reg_rec, new_data = aatd_train) %>%
+aatd_train_reg %>%
   # remove response
   select(-geno_class) %>%
   # set reference values
   summarize(across(everything(), min)) ->
-  aatd_ref
+  aatd_lr_ref
 
 # get coefficients (referent profile and distances from it)
 aatd_lr_fit %>%
   tidy() %>%
   select(term, estimate) %>%
   deframe() ->
-  aatd_coef
+  aatd_lr_coef
 
 # separate intercept as baseline value
-aatd_int <- aatd_coef[names(aatd_coef) == "(Intercept)"]
-aatd_coef <- aatd_coef[names(aatd_coef) != "(Intercept)"]
+aatd_lr_int <- aatd_lr_coef[names(aatd_lr_coef) == "(Intercept)"]
+aatd_lr_coef <- aatd_lr_coef[names(aatd_lr_coef) != "(Intercept)"]
+
+for (abs_bound in abs_bound_opt) {
 
 # determine weights (divide maximum effect by maximum weight)
-wt_max <- 25
-coef_min <- max(abs(aatd_coef)) / wt_max
-# aatd_wt <- round(aatd_coef[abs(aatd_coef) > coef_min / 2] / coef_min)
-aatd_wt <- round(aatd_coef / coef_min)
+coef_denom <- max(abs(aatd_lr_coef)) / abs_bound
+aatd_lr_pt <- round(aatd_lr_coef / coef_denom)
+
+# calculate probability conversion
+stop("Make sure this still makes sense with smoking use variable.")
+tibble(score = seq(0, sum(aatd_lr_pt))) %>%
+  mutate(risk = 1 / (1 + exp(- aatd_lr_int - score))) ->
+  aatd_lr_tab
 
 # calculate risk estimates
-aatd_risk_fun <- function(x) {
-  stopifnot(names(x) == names(aatd_wt))
-  aatd_int + sum(aatd_wt * unlist(x))
-}
-aatd_test %>%
+aatd_test_reg %>%
   rowwise() %>%
-  mutate(score = aatd_int + sum(aatd_wt * c_across(all_of(names(aatd_wt))))) %>%
+  mutate(score = sum(aatd_lr_pt * c_across(all_of(names(aatd_lr_pt))))) %>%
   ungroup() %>%
-  mutate(risk = 1 / (1 + exp(score))) %>%
+  mutate(risk = 1 / (1 + exp(- aatd_lr_int - score))) %>%
   select(score, risk) ->
-  aatd_test_risk
+  aatd_lr_risk
 
 # evaluate logistic regression-based risk score
 bind_cols(
-  select(aatd_test, class = geno_class),
-  transmute(
-    aatd_test_risk,
-    .pred_class = factor(ifelse(risk > .5, "Abnormal", "Normal")),
+  select(aatd_test_reg, class = geno_class),
+  mutate(
+    aatd_lr_risk,
     .pred_Abnormal = risk, .pred_Normal = 1 - risk
   )
-) %>%
-  metrics(truth = class, estimate = .pred_class, .pred_Abnormal) ->
-  aatd_lr_risk_eval
+) ->
+  aatd_lr_pred
 
-#' Evaluate FR risk score
+# cutoffs for specificity near that of COPD recommendation
+aatd_lr_pred %>%
+  # pull(class) %>% levels()
+  # NB: specify which level is the 'event'
+  roc_curve(truth = class, .pred_Abnormal, event_level = "second") ->
+  aatd_lr_roc
+aatd_lr_roc %>%
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  coord_equal() +
+  geom_path() +
+  geom_abline(intercept = 1, slope = -1, lty = 3)
+aatd_lr_roc %>%
+  slice_min(abs(specificity - aatd_copd_table$specificity), n = 1L) %>%
+  as_tibble() ->
+  aatd_lr_cut
+
+# metric tables
+aatd_lr_pred %>%
+  mutate(
+    .pred_class = factor(
+      ifelse(.pred_Abnormal > aatd_lr_cut$.threshold, "Abnormal", "Normal"),
+      levels = levels(aatd_test_reg$geno_class)
+    )
+  ) %>%
+  # NB: correct order of factors for `metrics()`
+  mutate(across(c(class, .pred_class), fct_rev)) %>%
+  metrics(truth = class, estimate = .pred_class, .pred_Abnormal) ->
+  aatd_lr_met
+
+# append to evaluation data
+eval_data <- bind_rows(eval_data, tibble(
+  referent_risk = aatd_lr_int,
+  point_vals = list(aatd_lr_coef),
+  score_risk = list(aatd_lr_tab),
+  predictions = list(aatd_lr_pred),
+  cutoff = list(aatd_lr_cut),
+  metrics = list(aatd_lr_met)
+))
+
+}
+
+#' Evaluate FasterRisk risk score
+
+aatd_train_int <- bake(aatd_int_rec, new_data = aatd_train)
+aatd_test_int <- bake(aatd_int_rec, new_data = aatd_test)
 
 # convert to `numpy` arrays
-bake(aatd_int_rec, new_data = aatd_train) %>%
+aatd_train_int %>%
   select(-geno_class) %>%
   np$asarray() %>%
   np_array(dtype = "int") ->
   X_train
-bake(aatd_int_rec, new_data = aatd_train) %>%
+aatd_train_int %>%
   pull(geno_class) %>%
   np$asarray() %>%
   np_array(dtype = "int") ->
   y_train
-bake(aatd_int_rec, new_data = aatd_test) %>%
+aatd_test_int %>%
   select(-geno_class) %>%
   np$asarray() %>%
   np_array(dtype = "int") ->
   X_test
-bake(aatd_int_rec, new_data = aatd_test) %>%
+aatd_test_int %>%
   pull(geno_class) %>%
   np$asarray() %>%
   np_array(dtype = "int") ->
   y_test
 
+for (n_terms in n_terms_opt) {
+for (abs_bound in abs_bound_opt) {
+
 # specify model
 aatd_rso <- fr$RiskScoreOptimizer(
   X = X_train, y = y_train,
-  k = n_terms_opt, select_top_m = n_models_fix,
-  lb = -abs_bound_opt, ub = abs_bound_opt,
+  k = n_terms, select_top_m = n_models_fix,
+  lb = -abs_bound, ub = abs_bound,
   parent_size = n_retain_fix, num_ray_search = n_mults_fix
 )
 
@@ -229,6 +363,92 @@ aatd_rso$optimize()
 # save results and destroy optimizer
 aatd_rso_res <- aatd_rso$get_models()
 rm(aatd_rso)
+
+for (i_model in seq(n_models_fix)) {
+
+# build classifier
+aatd_rsc <- fr$RiskScoreClassifier(
+  multiplier = aatd_rso_res[[1L]][[i_model]],
+  intercept = aatd_rso_res[[2L]][i_model],
+  coefficients = np$asarray(aatd_rso_res[[3L]][i_model, , drop = TRUE])
+)
+
+# recover coefficients
+aatd_fr_pt <- aatd_rsc$coefficients
+names(aatd_fr_pt) <- names(aatd_lr_pt)
+
+# calculate probability conversion
+stop("Make sure this still makes sense with smoking use variable.")
+# NB: this is the integer score, without the intercept or multiplier
+tibble(score = seq(0, sum(aatd_fr_pt))) %>%
+  mutate(risk = 1 / (1 + exp(- aatd_rsc$intercept - score))) ->
+  aatd_fr_tab
+
+# calculate risk estimates
+aatd_test_int %>%
+  rowwise() %>%
+  mutate(score = sum(aatd_fr_pt * c_across(all_of(names(aatd_fr_pt))))) %>%
+  ungroup() %>%
+  mutate(risk = 1 / (1 + exp(- aatd_rsc$intercept - score))) %>%
+  select(score, risk) ->
+  aatd_fr_risk
+
+# summarize results from model fit
+aatd_fr_risk %>%
+  bind_cols(
+  # .pred_class = as.integer(aatd_rsc$predict(X_test)),
+  .pred_Normal = as.vector(1 - aatd_rsc$predict_prob(X_test)),
+  .pred_Abnormal = as.vector(aatd_rsc$predict_prob(X_test)),
+  select(aatd_test_int, geno_class)
+) %>%
+  # restore factor levels
+  mutate(across(
+    any_of(c(".pred_class", "geno_class")),
+    ~ factor(ifelse(. == 1L, "Abnormal", "Normal"), c("Normal", "Abnormal"))
+  )) ->
+  aatd_fr_pred
+
+# cutoffs for specificity near that of COPD recommendation
+aatd_fr_pred %>%
+  # pull(geno_class) %>% levels()
+  # NB: specify which level is the 'event'
+  roc_curve(truth = geno_class, .pred_Abnormal, event_level = "second") ->
+  aatd_fr_roc
+aatd_fr_roc %>%
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  coord_equal() +
+  geom_path() +
+  geom_abline(intercept = 1, slope = -1, lty = 3)
+aatd_fr_roc %>%
+  slice_min(abs(specificity - aatd_copd_table$specificity), n = 1L) %>%
+  as_tibble() ->
+  aatd_fr_cut
+
+# metric tables
+aatd_fr_pred %>%
+  mutate(
+    .pred_class = factor(
+      ifelse(.pred_Abnormal > aatd_fr_cut$.threshold, "Abnormal", "Normal"),
+      levels = levels(aatd_fr_pred$geno_class)
+    )
+  ) %>%
+  metrics(truth = geno_class, estimate = .pred_class, .pred_Normal) ->
+  aatd_fr_met
+
+# append to evaluation data
+eval_data <- bind_rows(eval_data, tibble(
+  referent_risk = aatd_fr_int,
+  point_vals = list(aatd_fr_coef),
+  score_risk = list(aatd_fr_tab),
+  predictions = list(aatd_fr_pred),
+  cutoff = list(aatd_fr_cut),
+  metrics = list(aatd_fr_met)
+))
+
+}
+
+}
+}
 
 
 
