@@ -321,7 +321,7 @@ In general, SVMs are less interpretable than LR, decision tree, and even RF and 
 
 As in the first phase, we included models obtained by FasterRisk in this comparison.
 These models are generated and optimized in fundamentally different ways from the preceding model families:
-First, the FasterRisk program returns a collection of similarly-performing models rather than a single best-fit model. This is in part because the underlying space of possible models is not approximately continuous but coarsely discrete: Whereas the coefficients of LR and the tree weights of RF can be continuously tuned, the integer coefficients of FR models cannot. Moreover, two similarly-performing risk scores may assign meaningfully different weights to the same or even different sets of predictors, so the selection of a "best" model from among this collection has less to do with a marginal improvement in some performance measure than with the usefulness of its interpretation.
+First, the FasterRisk program returns a pool of near-optimal models rather than a single optimal model. This is in part because the underlying space of possible models is not approximately continuous but coarsely discrete: Whereas the coefficients of LR and the tree weights of RF can be continuously tuned, the integer coefficients of FR models cannot. Moreover, two similarly-performing risk scores may assign meaningfully different weights to the same or even different sets of predictors, so the selection of a "best" model from among this pool has less to do with a marginal improvement in some performance measure than with the usefulness of its interpretation.
 
 ## Comparison of model families
 
