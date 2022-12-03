@@ -7,6 +7,7 @@ read_rds(here::here("data/aatd-2-eval-ml.rds")) %>%
   unnest(hyperparameters) ->
   aatd_ml_metrics
 read_rds(here::here("data/aatd-2-eval-fr.rds")) %>%
+# read_rds(here::here("data/aatd-2-eval-fr-old.rds")) %>%
   select(-fold) %>%
   mutate(across(c(model, predictors, response), fct_inorder)) ->
   aatd_fr_metrics
@@ -81,6 +82,8 @@ aatd_ml_metrics %>%
   geom_pointrange()
 # logistic regression achieves more robust (AUROC) performance
 
+#' compare and optimize hyperparameter settings
+
 # track logistic regression performance across penalties
 aatd_ml_metrics %>%
   filter(model == "logistic regression" & .metric == "roc_auc") %>%
@@ -97,6 +100,22 @@ aatd_ml_metrics %>%
   ) +
   scale_x_continuous(trans = "log", breaks = 10 ^ seq(-9, 0))
 # tobacco use obtains greatest predictive value for each response
+
+# compare nearest neighbor hyperparameter settings
+aatd_ml_metrics %>%
+  filter(model == "nearest neighbors" & .metric == "roc_auc") %>%
+  group_by_at(vars(-id, -number, -.estimate)) %>%
+  summarize(mean = mean(.estimate), sd = sd(.estimate), .groups = "drop") %>%
+  group_by(model, predictors, response, .metric) %>%
+  mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
+  mutate(formula = fct_rev(formula)) %>%
+  ggplot(aes(x = neighbors, y = mean, ymin = mean - 2*sd, ymax = mean + 2*sd,
+             color = predictors, linetype = response, group = formula)) +
+  geom_line() +
+  geom_point(
+    data = ~ filter(filter(., mean == max(mean)), neighbors == max(neighbors))
+  ) +
+  scale_x_continuous(trans = "log", breaks = 10 ^ seq(0, 4))
 
 # compare FasterRisk models
 aatd_fr_metrics %>%

@@ -115,16 +115,18 @@ ii <- if (file.exists(here::here("data/aatd-1-split-ii.rds"))) {
 
 #' Load data
 
-# load data and subset to a fixed stratified sample for all experiments
+# load training data and subset to a fixed stratified sample for all experiments
 set.seed(seed)
 read_rds(here::here("data/aatd-pred.rds")) %>%
+  semi_join(read_rds(here::here("data/aatd-2-train.rds")), by = "record_id") %>%
   inner_join(read_rds(here::here("data/aatd-resp.rds")), by = "record_id") %>%
   mutate(stratum = case_when(
     genotype == "SZ" | genotype == "ZZ" | genotype == "MM" ~ genotype,
     TRUE ~ "Ab"
   )) %>%
   group_by(stratum) %>%
-  slice_sample(prop = p_data_1) %>%
+  # `p_data_1` is the proportion of the entire data set to use
+  slice_sample(prop = p_data_1 / p_train_2) %>%
   ungroup() %>%
   select(record_id) ->
   aatd_subset

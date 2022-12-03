@@ -11,7 +11,6 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
 library(tidyverse)
 library(tidymodels)
 theme_set(theme_bw())
-sample_denom <- "6"
 ```
 
 This phase of the project aims to complete two goals:
@@ -29,28 +28,28 @@ We will compare these models over a $3 \times 3$ grid of prediction tasks given 
 
 ```{r model selection results}
 # read in model summary data
-read_rds(here::here(str_c("data/aatd-1-copd-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-copd.rds")) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_copd_res
-read_rds(here::here(str_c("data/aatd-1-count-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-count.rds")) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_count
-read_rds(here::here(str_c("data/aatd-1-metric-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-metric.rds")) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_metric
-read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-pred.rds")) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_pred
-read_rds(here::here(str_c("data/aatd-1-fr-pred-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-fr-pred.rds")) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_fr_res_pred
 # model family groups
-read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-pred.rds")) %>%
   distinct(model) %>%
   mutate(type = case_when(
     model == "logistic regression" | model == "linear discriminant" ~
@@ -75,7 +74,7 @@ For this phase, each model family was fitted using a fixed set of parameter spec
 * support vector machines: degree 1, 2, or 3
 * FasterRisk: 7 terms, coefficient bound 5, beam search retention 12, ray search multipliers 24
 
-Models were evaluated using a fixed sample of $\frac{1}{`r sample_denom`}$ of the data.
+Models were evaluated using a fixed sample of $\frac{1}{6}$ of the data.
 The sample was stratified by a 4-way categorization of genotypes: ZZ, SZ, other non-MM, and MM. This was done in order to prevent significant changes in the balance of response values in each model.
 Models were fit on a \frac{2}{3} training set of this sample and evaluated on the remaining \frac{1}{3} testing set. This partition was also stratified by genotype, and the same partition was used across all evaluations.
 Since our goal in this phase was to identify generally over-performing models to optimize in the next phase, we used common or default parameter settings throughout.
@@ -96,7 +95,7 @@ In addition to the models' performance curves, we also include a marker at the s
 
 #### Machine learning models
 
-```{r roc plots for ML, fig.height=8}
+```{r roc plots for ML, fig.height=10}
 aatd_mod_res_pred %>%
   left_join(model_types, by = "model") %>%
   filter(type != "rule/tree-based") %>%
@@ -121,7 +120,7 @@ In some cases, SVM models are competitive with LR and LDA, but in many others th
 
 #### Integer programming models
 
-```{r roc plots for FR, fig.height=8}
+```{r roc plots for FR, fig.height=10}
 aatd_fr_res_pred %>%
   group_by(model, predictors, response) %>%
   roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
@@ -141,6 +140,29 @@ aatd_fr_res_pred %>%
 FasterRisk returns an ensemble of models of similar accuracy, some of which may be more useful than others.
 For each set of predictors and responses, we retrieved six models from the ensemble to compare.
 At the task of predicting SZ or any abnormal genotype, these models performed equally well (or poorly). At the task of predicting ZZ genotype, two subgroups were distinguishable. One subgroup was superior with respect to AUROC overall but moreover showed greatest improvement at increasing sensitivity at low-to-medium specificity.
+
+**Justify:**
+
+```{r roc plots for best ML and FR, fig.height=10}
+aatd_mod_res_pred %>%
+  bind_rows(aatd_fr_res_pred) %>%
+  filter(model == "logistic regression" | model == "nearest neighbor" |
+           str_detect(model, "FasterRisk")) %>%
+  mutate(type = ifelse(str_detect(model, "FasterRisk"), "FasterRisk", model)) %>%
+  mutate(type = fct_inorder(type)) %>%
+  group_by(model, type, predictors, response) %>%
+  roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  coord_equal() +
+  geom_path(aes(color = type)) +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
+  geom_point(data = filter(aatd_copd_res, predictors != "Dx+age")) +
+  scale_x_continuous(labels = scales::label_percent()) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  scale_color_manual(values = c("#e41a1c", "#377eb8", "darkgrey")) +
+  theme(legend.position = "bottom")
+```
 
 #### Sensitivity gain
 
@@ -246,7 +268,7 @@ In the plots below, note that both recall and precision lie along log-transforme
 
 #### Machine learning models
 
-```{r pr plots for ML, fig.height=6}
+```{r pr plots for ML, fig.height=10}
 aatd_mod_res_pred %>%
   left_join(model_types, by = "model") %>%
   filter(type != "rule/tree-based") %>%
@@ -273,7 +295,7 @@ These differences are marginal, however---as can be seen when the PR curves are 
 
 #### Integer programming models
 
-```{r pr plots for FR, fig.height=6}
+```{r pr plots for FR, fig.height=10}
 aatd_fr_res_pred %>%
   group_by(model, predictors, response) %>%
   pr_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
@@ -296,6 +318,31 @@ Overall, the FR models are competitive with the best of the ML models.
 
 Taken together, the ROC and PR curves favor logistic regression (and linear discriminant analysis) as candidate bases for a new risk score, though they should be carefully compared with the use-ready risk scores produced via integer programming by FasterRisk.
 
+**Justify:**
+
+```{r pr plots for best ML and FR, fig.height=10}
+aatd_mod_res_pred %>%
+  bind_rows(aatd_fr_res_pred) %>%
+  filter(model == "logistic regression" | model == "nearest neighbor" |
+           str_detect(model, "FasterRisk")) %>%
+  mutate(type = ifelse(str_detect(model, "FasterRisk"), "FasterRisk", model)) %>%
+  mutate(type = fct_inorder(type)) %>%
+  group_by(model, type, predictors, response) %>%
+  pr_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ggplot(aes(x = recall, y = precision)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  coord_equal() +
+  geom_path(aes(color = type)) +
+  geom_point(data = filter(aatd_copd_res, predictors != "Dx+age")) +
+  # lims(x = c(0, 1), y = c(0, 1)) +
+  scale_x_continuous(trans = "log", breaks = breaks_log(base = 10),
+                     labels = scales::label_percent()) +
+  scale_y_continuous(trans = "log", breaks = breaks_log(base = 10),
+                     labels = scales::label_percent()) +
+  scale_color_manual(values = c("#e41a1c", "#377eb8", "darkgrey")) +
+  theme(legend.position = "bottom")
+```
+
 # Phase 2: Model optimization
 
 ```{r model optimization results}
@@ -311,24 +358,26 @@ read_rds(here::here("data/aatd-2-eval-fr.rds")) %>%
   aatd_fr_metrics
 ```
 
-We considered two model families for the optimization phase: logistic regression and random forest.
+We considered three model families for the optimization phase: logistic regression, random forest, and nearest neighbors.
 We omitted linear discriminant analysis because it closely matched the performance of logistic regression, and because it is less well-understood by clinical researchers and not commonly used to derive risk scores. We also note that it relies on weaker assumptions about the data, which translate into less interpretable model components.
 We omitted decision trees because they showed no benefit in any of the experiments in Phase 1.
 
-We omitted nearest neighbors and support vector machines because they proved extremely time- and memory-intensive to fit. In the case of NN, this was due to limitations of the implementation: Our data comprise binary (and, in some cases, categorical) variables, so that the space of possible records is a hypercube. As a result, only a small number of neighborhoods can be defined around each case, using the Hamming distance defined by the number of variables on which two cases differ, and records are duplicated at high rates. In contrast, most NN implementations rely on the computation of all pairwise distances between cases, which is highly redundant in this setting. Without a weighting scheme on the variables, the NN approach is mismatched, and would require a new implementation to be computationally feasible.
+Due to limitations of the implementation, nearest neighbors models were computationally expensie: Our data comprise binary (and, in some cases, categorical) variables, so that the space of possible records is a hypercube. As a result, only a small number of neighborhoods can be defined around each case, using the Hamming distance defined by the number of variables on which two cases differ, and records are duplicated at high rates. In contrast, most NN implementations rely on the computation of all pairwise distances between cases, which is highly redundant in this setting. Without a weighting scheme on the variables, the NN approach is mismatched, and would require a new implementation to be computationally feasible.
 
-In general, SVMs are less interpretable than LR, decision tree, and even RF and NN models, and thereby less suitable for risk score derivation, but they can be justified when their predictive performance significantly exceeds these approaches. Our preliminary experiments showed no evidence of superior performance---indeed, SVMs performed slightly worse than most other model families---so we omit them from consideration.
+We omitted support vector machines in part because they proved extremely time- and memory-intensive to fit.
+In general, SVMs are less interpretable than LR, decision tree, and NN models, and thereby less suitable for risk score derivation, but they can be justified when their predictive performance significantly exceeds these approaches. Our preliminary experiments showed no evidence of superior performance---indeed, SVMs performed slightly worse than most other model families---so we omit them from consideration.
 
 As in the first phase, we included models obtained by FasterRisk in this comparison.
 These models are generated and optimized in fundamentally different ways from the preceding model families:
-First, the FasterRisk program returns a pool of near-optimal models rather than a single optimal model. This is in part because the underlying space of possible models is not approximately continuous but coarsely discrete: Whereas the coefficients of LR and the tree weights of RF can be continuously tuned, the integer coefficients of FR models cannot. Moreover, two similarly-performing risk scores may assign meaningfully different weights to the same or even different sets of predictors, so the selection of a "best" model from among this pool has less to do with a marginal improvement in some performance measure than with the usefulness of its interpretation.
+First, the FasterRisk program returns a pool of near-optimal models rather than a single optimal model. This is in part because the underlying space of possible models is not approximately continuous but coarsely discrete: Whereas the coefficients of LR, the tree sizes and counts of RF, and the neighborhood sizes of NN can be continuously tuned, the integer coefficients of FR models cannot. Moreover, two similarly-performing risk scores may assign meaningfully different weights to the same or even different sets of predictors, so the selection of a "best" model from among this pool has less to do with a marginal improvement in some performance measure than with the usefulness of its interpretation.
 
 ## Comparison of model families
 
-Across the same sets of predictors and responses as in Phase 1, we evaluated LR and RF models using 6-fold cross validation on a $\frac{4}{5}$ training set.
+Across the same sets of predictors and responses as in Phase 1, we evaluated LR, RF, and NN models using 6-fold cross validation on a $\frac{4}{5}$ training set.
 Within this set, for each 5--1 split of a 6-fold partition, models were _trained_ and _tuned_ on the $\frac{5}{6}$ part by identifying the parameter settings that obtained the best fit, then _tested_ on the remaining $\frac{1}{6}$.
 Logistic regression models were tuned over 6 values of the penalty parameter ($10 ^ {-10}$ through $10 ^ 0$ with exponents at increments of $2$), which controls the cost of each additional predictor in the pruned model.
 Random forest models were tuned over 10 parameter settings: each combination of 5 numbers of trees ($1$ through $100$ at rounded powers of $\sqrt{10}$) and 2 numbers of predictors per tree ($p ^ {1/3} \approx 3$ and $\sqrt{p} \approx 4$, where $p$ is the total number of predictors).
+Nearest neighbors models were tuned over $4 \times 2 = 8$ parameter settings: neighborhood sizes of $10^k$ were considered for $k=1,2,3,4$, and two weighting schemes were considered (rectangular and triangular).
 
 We tuned two parameter of FasterRisk: the number of terms (predictors) allowed in the score, and the bound on the values of their coefficients.
 In the first phase, we allotted 7 terms to each FR model, a rough upper bound on the number of "slots" available to human working memory (Miller &al, 2018), and coefficient values between $-5$ and $5$, the default setting.
@@ -374,9 +423,9 @@ aatd_ml_metrics %>%
   ggtitle("Performance of predictive models of ZZ genotype")
 ```
 
-Measured by overall accuracy, LR models showed more consistency across parameter settings, but some RF models achieved greater ultimate performance.
-Most FR models improved still upon the RF models, but with much more variability in performance.
-On the more important measure of AUROC, however, LR models universally outperformed RF models, and even outperformed most FR models.
+Measured by overall accuracy, LR models showed more consistency across parameter settings, but some RF models achieved greater ultimate performance than all but an outlier LR model. NN models showed greater variability and competitive performance.
+Most FR models improved upon all three ML models, but with variability similar to that of NN models.
+On the more important measure of AUROC, however, LR models universally outperformed RF and NN models, and even outperformed most FR models.
 This is not unexpected; FR models are derived from LR models and comprise a subclass subject to additional constraints. But the narrow margins by which LR models outperform (some) FR models suggest that they are a superior approach. (Optimized LR models must be transformed into usable risk scores, at some cost to their performance that cannot be known in advance.)
 
 Among the LR models, the inclusion of gender did not improve performance by either measure, but the inclusion of smoking history led to consistent, though not highly significant, improvement (a less than 0.01% increase in accuracy and a less than 5% increase in AUROC).
@@ -400,10 +449,10 @@ aatd_ml_metrics %>%
   filter(mean == max(mean)) %>%
   # rank model parameter settings
   mutate(param_pref = case_when(
-    ! is.na(penalty) ~ rank(penalty),
-    ! is.na(trees) ~ rank(desc(trees)),
-    ! is.na(terms) ~ rank(terms),
-    ! is.na(bound) ~ rank(bound)
+    ! is.na(penalty) ~ order(desc(penalty)),
+    ! is.na(trees) & ! is.na(mtry) ~ order(trees, mtry),
+    ! is.na(neighbors) ~ order(neighbors),
+    ! is.na(terms) & ! is.na(bound) ~ order(terms, bound)
   )) %>%
   filter(param_pref == min(param_pref)) %>%
   ungroup() ->

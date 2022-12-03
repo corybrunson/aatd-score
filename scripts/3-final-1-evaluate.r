@@ -21,7 +21,7 @@ n_mults_fix <- 24L
 
 # optimized hyperparameters
 warning("Choose these hyperparameter values based on the CV results.")
-penalty_opt <- 10^(-10)
+penalty_opt <- 10 ^ c(-4, 0)
 n_terms_opt <- c(7L, 10L)
 abs_bound_opt <- c(6L, 25L, 100L)
 
@@ -30,6 +30,9 @@ abs_bound_opt <- c(6L, 25L, 100L)
 # restrict to models of interest
 vars_predictors <- vars_predictors[c("Dx", "Dx+smoke use")]
 vars_response <- vars_response[c("ZZ")]
+
+# initialize results tibble
+eval_data <- tibble()
 
 #' Evaluation measures
 
@@ -154,7 +157,8 @@ aatd_train %>%
     .pred_Normal = Normal / (Abnormal + Normal),
     .pred_Abnormal = Abnormal / (Abnormal + Normal)
   ) %>%
-  mutate(risk = .pred_Abnormal) ->
+  mutate(risk = .pred_Abnormal) %>%
+  ungroup() ->
   aatd_copd_pred_tab
 
 # evaluate COPD as a predictor
@@ -206,23 +210,27 @@ aatd_copd_pred %>%
   metrics(truth = class, estimate = .pred_class, .pred_Abnormal) ->
   aatd_copd_met
 
-# initialize results tibble
-eval_data <- tibble(
+# append to evaluation data
+eval_data <- bind_rows(eval_data, tibble(
+  model = "COPD", predictors = "COPD", response = resp,
+  hyperparameters = list(tibble()),
   referent_risk = 0,
   point_vals = list(c(lung_hx_copd = 1)),
   score_risk = list(select(aatd_copd_pred_tab, score, risk = .pred_Abnormal)),
   predictions = list(aatd_copd_pred),
   cutoff = list(aatd_copd_cut),
   metrics = list(aatd_copd_met)
-)
+))
 
 #' Evaluate logistic regression-based risk score
 
 aatd_train_reg <- bake(aatd_reg_rec, new_data = aatd_train)
 aatd_test_reg <- bake(aatd_reg_rec, new_data = aatd_test)
 
+for (penalty in penalty_opt) {
+
 # fit logistic regression model
-logistic_reg(penalty = penalty_opt, mixture = mixture_fix) %>%
+logistic_reg(penalty = penalty, mixture = mixture_fix) %>%
   set_engine("glmnet") %>%
   set_mode("classification") %>%
   fit(geno_class ~ ., aatd_train_reg) ->
@@ -254,7 +262,6 @@ coef_denom <- max(abs(aatd_lr_coef)) / abs_bound
 aatd_lr_pt <- round(aatd_lr_coef / coef_denom)
 
 # calculate probability conversion
-stop("Make sure this still makes sense with smoking use variable.")
 tibble(score = seq(0, sum(aatd_lr_pt))) %>%
   mutate(risk = 1 / (1 + exp(- aatd_lr_int - score))) ->
   aatd_lr_tab
@@ -309,13 +316,17 @@ aatd_lr_pred %>%
 
 # append to evaluation data
 eval_data <- bind_rows(eval_data, tibble(
+  model = "logistic regression", predictors = pred, response = resp,
+  hyperparameters = list(tibble(penalty = penalty, abs_bound = abs_bound)),
   referent_risk = aatd_lr_int,
-  point_vals = list(aatd_lr_coef),
+  point_vals = list(aatd_lr_pt),
   score_risk = list(aatd_lr_tab),
   predictions = list(aatd_lr_pred),
   cutoff = list(aatd_lr_cut),
   metrics = list(aatd_lr_met)
 ))
+
+}
 
 }
 
@@ -378,7 +389,6 @@ aatd_fr_pt <- aatd_rsc$coefficients
 names(aatd_fr_pt) <- names(aatd_lr_pt)
 
 # calculate probability conversion
-stop("Make sure this still makes sense with smoking use variable.")
 # NB: this is the integer score, without the intercept or multiplier
 tibble(score = seq(0, sum(aatd_fr_pt))) %>%
   mutate(risk = 1 / (1 + exp(- aatd_rsc$intercept - score))) ->
@@ -437,8 +447,10 @@ aatd_fr_pred %>%
 
 # append to evaluation data
 eval_data <- bind_rows(eval_data, tibble(
-  referent_risk = aatd_fr_int,
-  point_vals = list(aatd_fr_coef),
+  model = "FasterRisk", predictors = pred, response = resp,
+  hyperparameters = list(tibble(n_terms = n_terms, abs_bound = abs_bound)),
+  referent_risk = aatd_rsc$intercept,
+  point_vals = list(aatd_fr_pt),
   score_risk = list(aatd_fr_tab),
   predictions = list(aatd_fr_pred),
   cutoff = list(aatd_fr_cut),
@@ -450,11 +462,7 @@ eval_data <- bind_rows(eval_data, tibble(
 }
 }
 
-
-
-stop("Extract risk score!")
-
-
+write_rds(eval_data, here::here("data/aatd-2-eval-final.rds"))
 
 }#LOOP
 }#LOOP

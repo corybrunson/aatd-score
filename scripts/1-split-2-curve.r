@@ -3,29 +3,105 @@
 
 library(tidyverse)
 library(tidymodels)
-sample_denom <- "6"
 
 # read in model summary data
-read_rds(here::here(str_c("data/aatd-1-copd-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-copd.rds")) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_copd_res
-read_rds(here::here(str_c("data/aatd-1-count-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-count.rds")) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_count
-read_rds(here::here(str_c("data/aatd-1-metric-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-metric.rds")) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_metric
-read_rds(here::here(str_c("data/aatd-1-pred-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-pred.rds")) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_mod_res_pred
-read_rds(here::here(str_c("data/aatd-1-fr-pred-", sample_denom, ".rds"))) %>%
+read_rds(here::here("data/aatd-1-fr-pred.rds")) %>%
   filter(predictors != "Dx+age") %>%
   mutate(across(c(predictors, response), fct_inorder)) ->
   aatd_fr_res_pred
+
+#' All model specifications
+
+# compare ROC curves of ML models
+aatd_mod_res_pred %>%
+  group_by(predictors, response, model) %>%
+  roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  coord_equal() +
+  geom_path(aes(color = model)) +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
+  geom_point(data = aatd_copd_res) ->
+  aatd_ml_roc
+print(aatd_ml_roc)
+ggsave(
+  here::here(str_c("fig/aatd-ml-roc.pdf")),
+  aatd_ml_roc
+)
+
+# compare ROC curves of FR models
+aatd_fr_res_pred %>%
+  group_by(predictors, response, model) %>%
+  roc_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  coord_equal() +
+  geom_path(aes(color = model)) +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
+  geom_point(data = aatd_copd_res) +
+  guides(color = "none") ->
+  aatd_fr_roc
+print(aatd_fr_roc)
+ggsave(
+  here::here(str_c("fig/aatd-fr-roc.pdf")),
+  aatd_fr_roc
+)
+
+# compare PR curves of ML models
+aatd_mod_res_pred %>%
+  group_by(predictors, response, model) %>%
+  pr_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ggplot(aes(x = recall, y = precision)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  coord_equal() +
+  geom_path(aes(color = model)) +
+  geom_point(data = aatd_copd_res) +
+  # lims(x = c(0, 1), y = c(0, 1)) +
+  scale_x_continuous(trans = "log", breaks = breaks_log(base = 10)) +
+  scale_y_continuous(trans = "log", breaks = breaks_log(base = 10)) ->
+  aatd_ml_pr
+print(aatd_ml_pr)
+ggsave(
+  here::here(str_c("fig/aatd-ml-pr.pdf")),
+  aatd_ml_pr
+)
+
+# compare PR curves of FR models
+aatd_fr_res_pred %>%
+  group_by(predictors, response, model) %>%
+  pr_curve(truth = geno_class, estimate = .pred_Abnormal) %>%
+  ggplot(aes(x = recall, y = precision)) +
+  facet_grid(rows = vars(predictors), cols = vars(response)) +
+  coord_equal() +
+  geom_path(aes(color = model)) +
+  geom_point(data = aatd_copd_res) +
+  # lims(x = c(0, 1), y = c(0, 1)) +
+  scale_x_continuous(trans = "log", breaks = breaks_log(base = 10)) +
+  scale_y_continuous(trans = "log", breaks = breaks_log(base = 10)) ->
+  aatd_fr_pr
+print(aatd_fr_pr)
+ggsave(
+  here::here(str_c("fig/aatd-fr-pr.pdf")),
+  aatd_fr_pr
+)
+
+#' Primary model specification
 
 pred <- "Dx"
 resp <- "ZZ"
@@ -125,8 +201,8 @@ ggsave(
 # select best ML and best FR models
 stop("This step must be manually curated based on the above ROC & PR curves.")
 best_models <- c(
-  "logistic regression", "nearest neighbor",
-  "FasterRisk 5", "FasterRisk 6"
+  "logistic regression", "random forest", "nearest neighbor",
+  "FasterRisk 1", "FasterRisk 4", "FasterRisk 6"
 )
 
 # compare ROC curves of best ML and best FR models

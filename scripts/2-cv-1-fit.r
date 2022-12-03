@@ -39,7 +39,8 @@ mtry_values <- c(
   round(sqrt(n_pred))
 )
 mtry_values <- unique(mtry_values)
-neighbors_values <- as.integer(10 ^ seq(.5, 2, by = .5))
+# 10^4 requires too much memory
+neighbors_values <- as.integer(10 ^ seq(1L, 3L, by = 1L))
 
 # logistic regression
 logistic_reg(penalty = tune(), mixture = 0) %>%
@@ -62,13 +63,13 @@ nearest_neighbor(neighbors = tune(), weight_func = tune()) %>%
   set_engine("kknn") %>%
   set_mode("classification") ->
   aatd_nn_spec
-grid_regular(weight_func(), levels = 4L) %>%
+grid_regular(weight_func(), levels = 2L) %>%
   mutate(weight_func = fct_inorder(weight_func)) %>%
   crossing(neighbors = neighbors_values) ->
   aatd_nn_grid
 
-ii <- if (file.exists(here::here("data/aatd-cv-ii.rds"))) {
-  read_rds(here::here("data/aatd-cv-ii.rds"))
+ii <- if (file.exists(here::here("data/aatd-2-cv-ii.rds"))) {
+  read_rds(here::here("data/aatd-2-cv-ii.rds"))
 } else {
   c(0L, 0L)
 }
@@ -316,45 +317,45 @@ aatd_metrics <- bind_rows(aatd_metrics, aatd_rf_met)
 #   bind_rows(aatd_nn_metrics) ->
 #   aatd_metrics
 
-# # tune hyperparameters & record metrics
-# crossing(aatd_nn_grid, transmute(aatd_cv, id, fold = row_number())) %>%
-#   mutate(metrics = vector(mode = "list", length = nrow(.))) ->
-#   aatd_nn_met
-# pb <- progress::progress_bar$new(
-#   format = "Nearest neighbors [:bar] :percent",
-#   total = nrow(aatd_nn_met), clear = FALSE
-# )
-# for (i in rev(seq(nrow(aatd_nn_met)))) {
-#   fold_i <- aatd_nn_met$fold[[i]]
-#   neighbors_i <- aatd_nn_met$neighbors[[i]]
-#   weight_func_i <- as.character(aatd_nn_met$weight_func[[i]])
-#   train_i <- bake(aatd_num_rec, new_data = training(aatd_cv$splits[[fold_i]]))
-#   test_i <- bake(aatd_num_rec, new_data = testing(aatd_cv$splits[[fold_i]]))
-#   nearest_neighbor(neighbors = neighbors_i, weight_func = weight_func_i) %>%
-#     set_engine("kknn") %>%
-#     set_mode("classification") %>%
-#     fit(geno_class ~ ., train_i) ->
-#     fit_i
-#   bind_cols(
-#     select(test_i, class = geno_class),
-#     predict(fit_i, new_data = test_i),
-#     predict(fit_i, new_data = test_i, type = "prob")
-#   ) %>%
-#     metrics(truth = class, estimate = .pred_class, .pred_Abnormal) ->
-#     met_i
-#   aatd_nn_met$metrics[[i]] <- met_i
-#   pb$tick()
-# }
-# aatd_nn_met %>%
-#   mutate(
-#     model = "nearest neighbors",
-#     predictors = pred, response = resp
-#   ) %>%
-#   select(-fold) %>%
-#   unnest(metrics) %>%
-#   nest(hyperparameters = c(neighbors, weight_func)) ->
-#   aatd_nn_met
-# aatd_metrics <- bind_rows(aatd_metrics, aatd_nn_met)
+# tune hyperparameters & record metrics
+crossing(aatd_nn_grid, transmute(aatd_cv, id, fold = row_number())) %>%
+  mutate(metrics = vector(mode = "list", length = nrow(.))) ->
+  aatd_nn_met
+pb <- progress::progress_bar$new(
+  format = "Nearest neighbors [:bar] :percent",
+  total = nrow(aatd_nn_met), clear = FALSE
+)
+for (i in rev(seq(nrow(aatd_nn_met)))) {
+  fold_i <- aatd_nn_met$fold[[i]]
+  neighbors_i <- aatd_nn_met$neighbors[[i]]
+  weight_func_i <- as.character(aatd_nn_met$weight_func[[i]])
+  train_i <- bake(aatd_num_rec, new_data = training(aatd_cv$splits[[fold_i]]))
+  test_i <- bake(aatd_num_rec, new_data = testing(aatd_cv$splits[[fold_i]]))
+  nearest_neighbor(neighbors = neighbors_i, weight_func = weight_func_i) %>%
+    set_engine("kknn") %>%
+    set_mode("classification") %>%
+    fit(geno_class ~ ., train_i) ->
+    fit_i
+  bind_cols(
+    select(test_i, class = geno_class),
+    predict(fit_i, new_data = test_i),
+    predict(fit_i, new_data = test_i, type = "prob")
+  ) %>%
+    metrics(truth = class, estimate = .pred_class, .pred_Abnormal) ->
+    met_i
+  aatd_nn_met$metrics[[i]] <- met_i
+  pb$tick()
+}
+aatd_nn_met %>%
+  mutate(
+    model = "nearest neighbors",
+    predictors = pred, response = resp
+  ) %>%
+  select(-fold) %>%
+  unnest(metrics) %>%
+  nest(hyperparameters = c(neighbors, weight_func)) ->
+  aatd_nn_met
+aatd_metrics <- bind_rows(aatd_metrics, aatd_nn_met)
 
 write_rds(aatd_metrics, here::here("data/aatd-2-eval-ml.rds"))
 write_rds(c(i_pred, i_resp), here::here("data/aatd-2-cv-ii.rds"))

@@ -32,7 +32,7 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
   ncol() ->
   n_pred
 ns_terms <- seq(5L, ceiling(3/4 * n_pred), length.out = 3L)
-abs_bounds <- c(2, 6, 10)
+abs_bounds <- c(1, 6, 21, 36)
 
 # read in existing data
 aatd_metrics <- if (file.exists(here::here("data/aatd-2-eval-fr.rds"))) {
@@ -188,6 +188,8 @@ rm(aatd_rso)
 
 aatd_fr_fold_met <- tibble()
 for (i_model in seq(n_models)) {
+  # if fewer models are obtained
+  if (i_model > nrow(aatd_rso_res[[3L]])) next
   
   # build classifier
   aatd_rsc <- fr$RiskScoreClassifier(
