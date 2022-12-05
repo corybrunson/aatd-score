@@ -262,11 +262,15 @@ coef_denom <- max(abs(aatd_lr_coef)) / abs_bound
 aatd_lr_pt <- round(aatd_lr_coef / coef_denom)
 
 # calculate probability conversion
-tibble(score = seq(0, sum(aatd_lr_pt))) %>%
-  mutate(risk = 1 / (1 + exp(- aatd_lr_int - score))) ->
+# tibble(score = seq(0, sum(aatd_lr_pt))) %>%
+#   mutate(risk = 1 / (1 + exp(- aatd_lr_int - score))) ->
+#   aatd_lr_tab
+tibble(score = seq(sum(pmin(aatd_lr_pt, 0)), sum(pmax(aatd_lr_pt, 0)))) %>%
+  mutate(score_adj = aatd_lr_int + score) %>%
+  mutate(risk = 1 / (1 + exp(- score_adj))) ->
   aatd_lr_tab
 
-# calculate risk estimates
+# calculate scores and risk estimates
 aatd_test_reg %>%
   rowwise() %>%
   mutate(score = sum(aatd_lr_pt * c_across(all_of(names(aatd_lr_pt))))) %>%
@@ -280,7 +284,8 @@ bind_cols(
   select(aatd_test_reg, class = geno_class),
   mutate(
     aatd_lr_risk,
-    .pred_Abnormal = risk, .pred_Normal = 1 - risk
+    .pred_Normal = 1 - risk,
+    .pred_Abnormal = risk
   )
 ) ->
   aatd_lr_pred
@@ -372,6 +377,7 @@ aatd_rso <- fr$RiskScoreOptimizer(
 aatd_rso$optimize()
 
 # save results and destroy optimizer
+# https://github.com/jiachangliu/FasterRisk/blob/main/src/fasterrisk/fasterrisk.py#L102
 aatd_rso_res <- aatd_rso$get_models()
 rm(aatd_rso)
 
@@ -389,22 +395,33 @@ aatd_fr_pt <- aatd_rsc$coefficients
 names(aatd_fr_pt) <- names(aatd_lr_pt)
 
 # calculate probability conversion
+# https://github.com/jiachangliu/FasterRisk/blob/main/src/fasterrisk/fasterrisk.py#L147
+# https://github.com/jiachangliu/FasterRisk/blob/main/src/fasterrisk/fasterrisk.py#L164
 # NB: this is the integer score, without the intercept or multiplier
-tibble(score = seq(0, sum(aatd_fr_pt))) %>%
-  mutate(risk = 1 / (1 + exp(- aatd_rsc$intercept - score))) ->
+# tibble(score = seq(0, sum(aatd_fr_pt))) %>%
+#   mutate(risk = 1 / (1 + exp(- aatd_rsc$intercept - score))) ->
+#   aatd_fr_tab
+tibble(score = seq(
+  aatd_rsc$intercept + sum(pmin(aatd_fr_pt, 0)),
+  aatd_rsc$intercept + sum(pmax(aatd_fr_pt, 0))
+)) %>%
+  mutate(score_adj = score / aatd_rsc$multiplier) %>%
+  mutate(risk = 1 / (1 + exp(- score_adj))) ->
   aatd_fr_tab
 
-# calculate risk estimates
+# calculate scores and risk estimates
 aatd_test_int %>%
   rowwise() %>%
   mutate(score = sum(aatd_fr_pt * c_across(all_of(names(aatd_fr_pt))))) %>%
   ungroup() %>%
-  mutate(risk = 1 / (1 + exp(- aatd_rsc$intercept - score))) %>%
+  mutate(risk = 1 /
+           (1 + exp(- (aatd_rsc$intercept + score) / aatd_rsc$multiplier))) %>%
   select(score, risk) ->
   aatd_fr_risk
 
 # summarize results from model fit
 aatd_fr_risk %>%
+  # validate manual calculations above with internal calculations here
   bind_cols(
   # .pred_class = as.integer(aatd_rsc$predict(X_test)),
   .pred_Normal = as.vector(1 - aatd_rsc$predict_prob(X_test)),

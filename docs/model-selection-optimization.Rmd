@@ -10,6 +10,7 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
                       fig.width = 8)
 library(tidyverse)
 library(tidymodels)
+source(here::here("code/settings.r"))
 theme_set(theme_bw())
 ```
 
@@ -535,7 +536,11 @@ We will need to decide whether additional terms or larger scores are warranted f
 
 # Phase 3: Model evaluation
 
-## Selection of optimized model
+## Protocol
+
+In this section, i lay out the protocol for the evaluation of candidates and selection of a final model specification.
+
+### Selection of optimized model
 
 The only additional predictor that improves both LR and FR models is smoking history, and the improvement appears to be substantial.
 This could be carefully tested in the LR models via a likelihood ratio test of the null hypothesis that the model with smoking history outperforms the model without, or by using the Akaike Information Criterion to quantify the trade-off between predictive performance and model complexity.
@@ -543,7 +548,7 @@ The answer is less straightforward for the FR models.
 
 Finally, whether a LR or FR model is selected for the final risk score, we must decide how sparse to require it. This amounts to choosing a complexity penalty for the LR model or to choosing a term limit and coefficient range for the FR model.
 
-## Obtaining risk scores from optimized models
+### Obtaining risk scores from optimized models
 
 FasterRisk provides ready-made risk scores; no further processing needs to be done.
 Risk scores can be calculated by adding small integer multiples of the categorical attributes and then mapping these scores to their associated risk estimates (probabilities of abnormal genotype).
@@ -556,9 +561,214 @@ The linear regression model will undergo the following steps, adapted from Sulli
 4. Each score $s$ (the point total) will be mapped to a risk estimate $p$ (a probability) via the link function that defines the logistic regression model:
 $$p = \frac{1}{1 + \exp(s)}$$
 
-## Final evaluation
+### Final evaluation
 
-The selected model family and hyperparameters will be evaluated by first fitting them to the entire $\frac{4}{5}$ training set from the second phase and then evaluating its predictions on the remaining $\frac{1}{5}$ testing set.
-This will provide our best estimate for the performance of the final model on new data (of the same type as the data already collected). Remember that this is, by definition, data we do not currently have.
+```{r read in final model evaluations}
+eval_data <- read_rds(here::here("data/aatd-2-eval-final.rds"))
+```
 
-The final model will then be obtained by fitting the same family and hyperparameters to _the entire data set_. This final model cannot be evaluated using our data but will provide our best proposal for a general risk score.
+We evaluate the selected model specifications (families and hyperparameter sets) by first fitting them to the entire $\frac{4}{5}$ training set from the second phase and then evaluating their predictions on the remaining $\frac{1}{5}$ testing set.
+This provides our best estimate for the performances of the final candidate models on new data (of the same type as the data already collected). Remember that this is, by definition, data we do not currently have.
+Our choice from among these models is based as much on interpretation as on performance.
+The final model is then obtained by fitting the same family and hyperparameters to _the entire data set_. This final model cannot be evaluated using our data but provides our best proposal for a general risk score.
+
+## Candidate models
+
+In this section we compare several candidate models and select a final model to fit on the entire data set.
+
+### Performance of candidate models
+
+```{r ROC curves for candidate models}
+eval_data %>%
+  filter(model != "COPD") %>%
+  rename(family = model) %>%
+  mutate(specification = map_chr(
+    hyperparameters,
+    ~ str_c(names(.), unlist(.), sep = " = ", collapse = ", ")
+  )) %>%
+  unite(col = "model", family, specification, sep = ": ", remove = FALSE) %>%
+  mutate(model = ifelse(
+    str_detect(model, "FasterRisk"),
+    str_c(model, (row_number() - 1L) %% 2L + 1L, sep = ", #"),
+    model
+  )) %>%
+  mutate(model = fct_inorder(model)) %>%
+  # OOPS
+  mutate(predictions = map(
+    predictions,
+    ~ rename_with(., function(x) str_remove(x, "^geno_"))
+  )) %>%
+  # restrict to best-performing models
+  # unnest(metrics) %>% filter(.metric == "roc_auc") %>%
+  # pull(.estimate) %>% hist()
+  # filter(.estimate > 0.6) %>%
+  unnest(hyperparameters) %>%
+  unnest(predictions) %>%
+  group_by(predictors, response, family, abs_bound, model) %>%
+  roc_curve(truth = class, estimate = .pred_Abnormal,
+            event_level = "second") %>%
+  ggplot(aes(x = specificity, y = sensitivity, group = model)) +
+  facet_grid(cols = vars(predictors)) +
+  coord_equal() +
+  geom_path(aes(color = family, linetype = factor(abs_bound))) +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
+  labs(color = "Model family", linetype = "Abs. bound") +
+  theme(legend.position = "bottom")
+```
+
+Above are ROC curves for the 9 final candidate model specifications.
+With two exceptions, they are comparable in performance within each predictor set.
+We can identify the two lower-performing specifications in the area-under-the-curve table below.
+
+```{r compare AUROC of final models}
+eval_data %>%
+  mutate(model = fct_inorder(model)) %>%
+  unnest(metrics) %>%
+  filter(.metric == "roc_auc") ->
+  eval_auroc
+eval_auroc %>%
+  filter(model != "COPD") %>%
+  mutate(specification = map_chr(
+    hyperparameters,
+    ~ str_c(names(.), unlist(.), sep = " = ", collapse = ", ")
+  )) %>%
+  ggplot(aes(x = .estimate, y = specification, color = model)) +
+  facet_grid(rows = vars(predictors)) +
+  geom_vline(
+    data = select(distinct(filter(eval_auroc, model == "COPD")), -predictors),
+    aes(xintercept = .estimate)
+  ) +
+  geom_point() +
+  labs(x = "AUROC", y = NULL, color = NULL)
+```
+
+While the best-performing logistic regression models on average outperform the FasterRisk models, the logistic regression family also produces the worst-performing models when its regularization penalty is high and its point bound is small.
+This may be because the penalty suppresses too many predictors; we will compare the predictor point values across all medical history--only models below.
+
+### Score ranges of candidate models
+
+The following two plots compare the resolutions and ranges of values taken by the candidate risk scores on the testing data.
+A useful risk score will have sufficient resolution to distinguish cases that are different in consequential ways. However, its resolution will not be so high as to introduce large ranges of values that are never seen in practice.
+A useful risk score will also effectively discriminate among cases in a population. Its value will range from low to high, and a more uniform distribution reflects greater discriminatory utility.
+Note that the ordinate (vertical axis) is $\log(x+1)$-transformed. This is done to make small bars corresponding to rare risk score values more visible. The abscissa is always at 1-point resolution.
+Because `FasterRisk` returns 2 models per specification, we represent each representation using "dodging" histograms in the same plotting window.
+
+```{r compare histograms of scores of candidate logistic regression models}
+eval_data %>%
+  filter(model == "logistic regression" & predictors == "Dx") %>%
+  unnest(hyperparameters) %>%
+  unnest(predictions) %>%
+  ggplot(aes(x = score)) +
+  facet_wrap(facets = vars(penalty, abs_bound), nrow = 2L, scales = "free_x",
+             labeller = labeller(.cols = label_both, .multi_line = FALSE)) +
+  geom_histogram(binwidth = 1L) +
+  scale_y_continuous(trans = "log1p", breaks = 10 ^ seq(0L, 5L),
+                     labels = scales::comma) +
+  labs(x = "Score", y = NULL)
+```
+
+```{r compare histograms of scores of candidate FasterRisk models}
+eval_data %>%
+  filter(model == "FasterRisk" & predictors == "Dx") %>%
+  mutate(number = as.character((row_number() - 1L) %% 2L + 1L)) %>%
+  unnest(hyperparameters) %>%
+  unnest(predictions) %>%
+  ggplot(aes(x = score)) +
+  facet_wrap(facets = vars(n_terms, abs_bound), nrow = 2L, scales = "free_x",
+             labeller = labeller(.cols = label_both, .multi_line = FALSE)) +
+  geom_histogram(aes(alpha = number), position = "dodge", binwidth = 1L) +
+  scale_y_continuous(trans = "log1p", breaks = 10 ^ seq(0L, 5L),
+                     labels = scales::comma) +
+  scale_alpha_manual(values = c(.5, .9), guide = "none") +
+  labs(x = "Score", y = NULL)
+```
+
+While the risk scores with greater coefficient bounds offer higher resolution, they do not improve overall discriminability.
+The two higher-resolution risk scores detect the difference between the minimum score and the modal score---that is, the existence of a subpopulation of patients at lower-than-typical risk of abnormal genotype.
+Higher resolutions also introduce considerable gaps in some cases, though they do introduce intermediate-risk values within the gaps present in the lower-resolution risk scores.
+At least for the FasterRisk models, a point bound of 25 seems most useful; the benefit is less clear among the logistic regression models.
+
+### Item point values in candidate models
+
+```{r compare coefficients of candidate models}
+eval_data %>%
+  filter(model != "COPD" & predictors == "Dx") %>%
+  mutate(model = fct_inorder(model)) %>%
+  # restrict to best-performing models
+  unnest(metrics) %>% filter(.metric == "roc_auc") %>%
+  filter(.estimate > 0.6) %>%
+  # distinguish FR models (necessary for pivoting below)
+  mutate(number = case_when(
+    model == "FasterRisk" ~ as.character((row_number() - 1L) %% 2L + 1L),
+    TRUE ~ NA_character_
+  )) %>%
+  select(-predictors, -response) %>%
+  mutate(point_vals = map(
+    point_vals,
+    enframe, name = "item", value = "points"
+  )) %>%
+  unnest(point_vals) %>%
+  mutate(item = pred_names[item]) ->
+  eval_points
+```
+
+The table below compares the point values of the predictor items across all candidate models.
+Each row is a candidate risk score.
+We should first assess which would be most convenient in practice.
+Then, we should assess whether any estimated improvement in performance makes others more valuable overall.
+For ease of viewing, the items are sorted by greatest (ever) point value.
+Areas under the ROC curve are reported in the rightmost column.
+
+```{r coefficient table}
+eval_points %>%
+  mutate(AUROC = format(.estimate, digits = 3L, nsmall = 3L)) %>%
+  mutate(specification = map_chr(
+    hyperparameters,
+    ~ str_c(names(.), unlist(.), sep = " = ", collapse = ", ")
+  )) %>%
+  mutate(points = as.integer(points)) %>%
+  # sort by largest coefficients
+  mutate(item = fct_rev(fct_reorder(item, points, function(x) max(abs(x))))) %>%
+  pivot_wider(c(model, specification, number, AUROC),
+              names_from = item, values_from = points, names_sort = TRUE) %>%
+  # remove items that are never used
+  select(where(~ ! all(. == 0))) %>%
+  select(-number) %>%
+  # sort by largest coefficients
+  arrange(across(c(-model, -specification, -AUROC), desc)) %>%
+  relocate(AUROC, .after = everything()) %>%
+  knitr::kable()
+```
+
+On inspection, the following candidates stand out as exceptional:
+
+* The logistic regression model with low penalty and coefficient bound 25, which has an AUROC of 0.642 using 12 items.
+* One FasterRisk model with 10 items and a coefficient bound of 100, which has an AUROC of 0.640 and two fewer items than the aforementioned logistic regression model that matches its performance; the omitted items are family history of AAT deficiency and hepatitis.
+* One FasterRisk model with 10 items and a coefficient bound of 25, with an AUROC of 0.629 and in fact a largest coefficient of only 14; compared to the aforementioned FasterRisk model, it exchanges jaundice for hepatitis.
+* One logistic regression model and several equivalent FasterRisk models with AUROC of 0.613 and only 6 items, all included in each of the aforementioned models: AAT deficiency (self), liver transplantation, cirrhosis, bronchiectasis, emphysema, and abnormal LFT.
+
+The relative magnitudes of the point values are visually compared in the plot below.
+
+```{r coefficient plot, fig.height=7}
+eval_points %>%
+  mutate(model = fct_inorder(ifelse(
+    model == "FasterRisk",
+    str_c(model, " #", number), as.character(model)
+  ))) %>%
+  mutate(model = fct_inorder(model)) %>%
+  mutate(item = fct_reorder(item, points, function(x) max(abs(x)))) %>%
+  unnest(hyperparameters) %>%
+  mutate(sign = factor(sign(points), levels = c("-1", "1"))) %>%
+  ggplot(aes(x = points, y = item, fill = sign)) +
+  facet_grid(rows = vars(model), cols = vars(abs_bound), scales = "free_x") +
+  geom_vline(xintercept = 0) +
+  geom_col() +
+  scale_fill_discrete(guide = "none") +
+  labs(x = "Point value", y = NULL, fill = NULL)
+```
+
+### ZZ cases recovered by inclusion of smoking history
+
+
+
+## Final model

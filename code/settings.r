@@ -42,3 +42,21 @@ vars_response <- list(
   # Z = expr(grepl(".*Z$", genotype)),
   Ab = expr(genotype != "MM")
 )
+
+# elegant predictor names
+pred_names <- c(
+  "lung_hx_asthma" = "asthma",
+  "lung_hx_chronic_bronchitis" = "bronchitis",
+  "lung_hx_emphysema" = "emphysema",
+  "lung_hx_copd" = "COPD",
+  "lung_hx_allergies" = "allergies",
+  "lung_hx_bronchiectasis" = "bronchiectasis",
+  "lung_hx_aat_deficiency_self" = "AAT def. (self)",
+  "lung_hx_aat_deficiency_family" = "AAT def. (fam.)",
+  "lung_hx_family_history_copd" = "COPD (fam.)",
+  "liver_hx_cirrhosis" = "cirrhosis",
+  "liver_hx_jaundice" = "jaundice",
+  "liver_hx_hepatitis" = "hepatitis",
+  "liver_hx_liver_transplant" = "liver Tx",
+  "liver_hx_abnormal_liver_function_test" = "abnormal LFT"
+)
