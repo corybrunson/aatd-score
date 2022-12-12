@@ -29,7 +29,7 @@ eval_data %>%
   # restrict to best-performing models
   unnest(metrics) %>% filter(.metric == "roc_auc") %>%
   # pull(.estimate) %>% hist()
-  filter(.estimate > 0.6) %>%
+  filter(.estimate > 0.55) %>%
   unnest(hyperparameters) %>%
   unnest(predictions) %>%
   group_by(predictors, response, family, abs_bound, model) %>%

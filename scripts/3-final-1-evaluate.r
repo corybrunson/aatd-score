@@ -147,13 +147,14 @@ recipe(aatd_train, geno_class ~ .) %>%
 
 # calculate proportions of abnormal genotypes by COPD
 aatd_train %>%
-  group_by(geno_class, lung_hx_copd) %>%
+  group_by(geno_class, lung_hx_copd_emphysema_bronchitis) %>%
   count(name = "count") %>%
   ungroup() %>%
-  pivot_wider(lung_hx_copd, names_from = geno_class, values_from = count) %>%
+  pivot_wider(lung_hx_copd_emphysema_bronchitis,
+              names_from = geno_class, values_from = count) %>%
   rowwise() %>%
   transmute(
-    score = as.integer(lung_hx_copd),
+    score = as.integer(lung_hx_copd_emphysema_bronchitis),
     .pred_Normal = Normal / (Abnormal + Normal),
     .pred_Abnormal = Abnormal / (Abnormal + Normal)
   ) %>%
@@ -163,7 +164,8 @@ aatd_train %>%
 
 # evaluate COPD as a predictor
 aatd_train %>%
-  transmute(screen = lung_hx_copd, test = geno_class == "Abnormal") %>%
+  transmute(screen = lung_hx_copd_emphysema_bronchitis,
+            test = geno_class == "Abnormal") %>%
   count(screen, test, name = "count") %>%
   mutate(quadrant = case_when(
     screen & test ~ "TP",
@@ -182,7 +184,8 @@ aatd_train %>%
 
 # predictions for testing data
 aatd_test %>%
-  transmute(class = geno_class, score = as.integer(lung_hx_copd)) %>%
+  transmute(class = geno_class,
+            score = as.integer(lung_hx_copd_emphysema_bronchitis)) %>%
   left_join(aatd_copd_pred_tab, by = "score") ->
   aatd_copd_pred
 
@@ -215,7 +218,7 @@ eval_data <- bind_rows(eval_data, tibble(
   model = "COPD", predictors = "COPD", response = resp,
   hyperparameters = list(tibble()),
   referent_risk = 0,
-  point_vals = list(c(lung_hx_copd = 1)),
+  point_vals = list(c(lung_hx_copd_emphysema_bronchitis = 1)),
   score_risk = list(select(aatd_copd_pred_tab, score, risk = .pred_Abnormal)),
   predictions = list(aatd_copd_pred),
   cutoff = list(aatd_copd_cut),
@@ -363,7 +366,7 @@ aatd_test_int %>%
   y_test
 
 for (n_terms in n_terms_opt) {
-for (abs_bound in abs_bound_opt) {
+for (abs_bound in abs_bound_opt[2:3]) {
 
 # specify model
 aatd_rso <- fr$RiskScoreOptimizer(
@@ -382,6 +385,9 @@ aatd_rso_res <- aatd_rso$get_models()
 rm(aatd_rso)
 
 for (i_model in seq(n_models_fix)) {
+
+# if fewer models are obtained
+if (i_model > nrow(aatd_rso_res[[3L]])) next
 
 # build classifier
 aatd_rsc <- fr$RiskScoreClassifier(

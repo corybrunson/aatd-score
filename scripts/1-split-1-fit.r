@@ -48,13 +48,13 @@ C5_rules(trees = 1L) %>%
   aatd_dr_mod
 
 # decision tree, fix parameters
-decision_tree(tree_depth = 6L) %>%
+decision_tree(tree_depth = 7L) %>%
   set_engine("rpart") %>%
   set_mode("classification") ->
   aatd_dt_mod
 
 # random forest, fix parameters
-rand_forest(mtry = NULL, trees = 120L) %>%
+rand_forest(mtry = 4L, trees = 120L) %>%
   set_engine("randomForest") %>%
   set_mode("classification") ->
   aatd_rf_mod
@@ -177,7 +177,8 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
 #' COPD indication
 
 aatd_data %>%
-  transmute(screen = lung_hx_copd, test = geno_class == "Abnormal") %>%
+  transmute(screen = lung_hx_copd_emphysema_bronchitis,
+            test = geno_class == "Abnormal") %>%
   count(screen, test, name = "count") %>%
   mutate(quadrant = case_when(
     screen & test ~ "TP",

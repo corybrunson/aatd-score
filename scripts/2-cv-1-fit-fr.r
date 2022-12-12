@@ -31,7 +31,7 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
   select(unique(unlist(sapply(vars_predictors, eval)))) %>%
   ncol() ->
   n_pred
-ns_terms <- seq(5L, ceiling(3/4 * n_pred), length.out = 3L)
+ns_terms <- ceiling(seq(5L, 3/4 * n_pred, length.out = 3L))
 abs_bounds <- c(1, 6, 21, 36)
 
 # read in existing data

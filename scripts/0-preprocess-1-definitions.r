@@ -40,6 +40,8 @@ here::here("data-raw/AAT Detection Database_deidenti.xlsx") %>%
   ) ->
   aatd_data
 
+#' Investigate age ranges
+
 # check variables for completeness
 aatd_data %>%
   mutate(across(everything(), is.na)) %>%
@@ -116,6 +118,8 @@ aatd_data %>%
   select(-record_id, -genotype_simple, -starts_with("aat_")) %>%
   vis_dat(warn_large_data = FALSE)
 
+#' (Re)define variables
+
 # define age groups based on data collection window
 aatd_data %>%
   pull(date_received) %>% range(na.rm = TRUE) %>%
@@ -139,6 +143,8 @@ aatd_data %>%
 
 # transform variables in preparation for predictive modeling
 aatd_data %>%
+  # drop response variables
+  select(-starts_with("genotype"), -starts_with("aat_")) %>%
   # flag missing reception dates
   # change implausible birth dates to missing values
   # note: not enough `date_received` values for temporal validation
@@ -155,8 +161,16 @@ aatd_data %>%
     interval(date_of_birth, date_received) / years(1) < -3/4 ~ NA_real_,
     TRUE ~ age_calculated
   )) %>%
-  # drop response variables
-  select(-starts_with("genotype"), -starts_with("aat_")) %>%
+  # drop and combine medical history predictors
+  mutate(
+    lung_hx_copd_emphysema_bronchitis =
+      lung_hx_copd | lung_hx_emphysema | lung_hx_chronic_bronchitis
+  ) %>%
+  select(
+    -lung_hx_copd, -lung_hx_emphysema, -lung_hx_chronic_bronchitis,
+    -lung_hx_aat_deficiency_self, -liver_hx_liver_transplant,
+    -ends_with("_none")
+  ) %>%
   # coarser smoking / tobacco history variables
   mutate(
     smoking_hx = smoking_history_cigarette == "Past" |

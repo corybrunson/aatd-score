@@ -34,10 +34,11 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
   ncol() ->
   n_pred
 trees_values <- round(10 ^ seq(0, 2, by = .5))
-mtry_values <- c(
+mtry_values <- sort(unique(c(
   round(n_pred ^ (1/3)),
-  round(sqrt(n_pred))
-)
+  round(sqrt(n_pred)),
+  floor(n_pred / 2)
+)))
 mtry_values <- unique(mtry_values)
 # 10^4 requires too much memory
 neighbors_values <- as.integer(10 ^ seq(1L, 3L, by = 1L))
@@ -67,6 +68,14 @@ grid_regular(weight_func(), levels = 2L) %>%
   mutate(weight_func = fct_inorder(weight_func)) %>%
   crossing(neighbors = neighbors_values) ->
   aatd_nn_grid
+
+# # quadratic SVM model
+# svm_poly(degree = 2L, cost = tune(), scale_factor = tune()) %>%
+#   set_engine("kernlab") %>%
+#   set_mode("classification") ->
+#   aatd_svm2_mod
+# grid_regular(cost(), scale_factor()) ->
+#   aatd_svm2_grid
 
 ii <- if (file.exists(here::here("data/aatd-2-cv-ii.rds"))) {
   read_rds(here::here("data/aatd-2-cv-ii.rds"))

@@ -78,7 +78,7 @@ aatd_ml_metrics %>%
   mutate(formula = interaction(predictors, response, sep = " -> ")) %>%
   mutate(formula = fct_rev(formula)) %>%
   ggplot(aes(x = mean, xmin = mean - 2*sd, xmax = mean + 2*sd, y = formula)) +
-  facet_grid(model ~ .metric) +
+  facet_grid(model ~ .metric, scales = "free_x") +
   geom_pointrange()
 # logistic regression achieves more robust (AUROC) performance
 
@@ -95,6 +95,7 @@ aatd_ml_metrics %>%
   ggplot(aes(x = penalty, y = mean, ymin = mean - 2*sd, ymax = mean + 2*sd,
              color = predictors, linetype = response, group = formula)) +
   geom_line() +
+  # plot points only at best performance
   geom_point(
     data = ~ filter(filter(., mean == max(mean)), penalty == max(penalty))
   ) +
@@ -112,6 +113,7 @@ aatd_ml_metrics %>%
   ggplot(aes(x = neighbors, y = mean, ymin = mean - 2*sd, ymax = mean + 2*sd,
              color = predictors, linetype = response, group = formula)) +
   geom_line() +
+  # plot points only at best performance
   geom_point(
     data = ~ filter(filter(., mean == max(mean)), neighbors == max(neighbors))
   ) +
