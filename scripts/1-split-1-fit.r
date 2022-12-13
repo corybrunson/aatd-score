@@ -177,8 +177,10 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
 #' COPD indication
 
 aatd_data %>%
-  transmute(screen = lung_hx_copd_emphysema_bronchitis,
-            test = geno_class == "Abnormal") %>%
+  transmute(
+    screen = lung_hx_copd | lung_hx_emphysema | lung_hx_chronic_bronchitis,
+    test = geno_class == "Abnormal"
+  ) %>%
   count(screen, test, name = "count") %>%
   mutate(quadrant = case_when(
     screen & test ~ "TP",

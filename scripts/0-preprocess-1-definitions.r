@@ -162,12 +162,12 @@ aatd_data %>%
     TRUE ~ age_calculated
   )) %>%
   # drop and combine medical history predictors
-  mutate(
-    lung_hx_copd_emphysema_bronchitis =
-      lung_hx_copd | lung_hx_emphysema | lung_hx_chronic_bronchitis
-  ) %>%
+  # mutate(
+  #   lung_hx_copd_emphysema_bronchitis =
+  #     lung_hx_copd | lung_hx_emphysema | lung_hx_chronic_bronchitis
+  # ) %>%
   select(
-    -lung_hx_copd, -lung_hx_emphysema, -lung_hx_chronic_bronchitis,
+    # -lung_hx_copd, -lung_hx_emphysema, -lung_hx_chronic_bronchitis,
     -lung_hx_aat_deficiency_self, -liver_hx_liver_transplant,
     -ends_with("_none")
   ) %>%

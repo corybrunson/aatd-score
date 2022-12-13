@@ -147,6 +147,8 @@ recipe(aatd_train, geno_class ~ .) %>%
 
 # calculate proportions of abnormal genotypes by COPD
 aatd_train %>%
+  mutate(lung_hx_copd_emphysema_bronchitis =
+           lung_hx_copd | lung_hx_emphysema + lung_hx_chronic_bronchitis) %>%
   group_by(geno_class, lung_hx_copd_emphysema_bronchitis) %>%
   count(name = "count") %>%
   ungroup() %>%
@@ -164,6 +166,8 @@ aatd_train %>%
 
 # evaluate COPD as a predictor
 aatd_train %>%
+  mutate(lung_hx_copd_emphysema_bronchitis =
+           lung_hx_copd | lung_hx_emphysema + lung_hx_chronic_bronchitis) %>%
   transmute(screen = lung_hx_copd_emphysema_bronchitis,
             test = geno_class == "Abnormal") %>%
   count(screen, test, name = "count") %>%
@@ -184,6 +188,8 @@ aatd_train %>%
 
 # predictions for testing data
 aatd_test %>%
+  mutate(lung_hx_copd_emphysema_bronchitis =
+           lung_hx_copd | lung_hx_emphysema + lung_hx_chronic_bronchitis) %>%
   transmute(class = geno_class,
             score = as.integer(lung_hx_copd_emphysema_bronchitis)) %>%
   left_join(aatd_copd_pred_tab, by = "score") ->
