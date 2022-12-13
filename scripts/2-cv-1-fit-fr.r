@@ -31,8 +31,9 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
   select(unique(unlist(sapply(vars_predictors, eval)))) %>%
   ncol() ->
   n_pred
-ns_terms <- ceiling(seq(5L, 3/4 * n_pred, length.out = 3L))
-abs_bounds <- c(1, 6, 21, 36)
+# ns_terms <- ceiling(seq(5L, 3/4 * n_pred, length.out = 3L))
+ns_terms <- c(5L, n_pred - 1L)
+abs_bounds <- c(6, 21, 36)
 
 # read in existing data
 aatd_metrics <- if (file.exists(here::here("data/aatd-2-eval-fr.rds"))) {

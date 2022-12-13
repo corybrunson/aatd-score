@@ -202,7 +202,7 @@ ggsave(
 stop("This step must be manually curated based on the above ROC & PR curves.")
 best_models <- c(
   "logistic regression", "nearest neighbor",# "quadratic svm",
-  "FasterRisk 1", "FasterRisk 6"
+  "FasterRisk 2", "FasterRisk 6"
 )
 
 # compare ROC curves of best ML and best FR models
