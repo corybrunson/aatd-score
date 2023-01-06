@@ -15,7 +15,8 @@ read_rds(here::here("data/aatd-2-eval-fr.rds")) %>%
 # check for duplicates
 aatd_ml_metrics %>%
   count(predictors, response, model, .metric, .estimator, name = "count") %>%
-  count(predictors, response, model, count, name = "n")
+  count(predictors, response, model, count, name = "n") %>%
+  print(n = Inf)
 # remind self of numbers of models obtained
 aatd_fr_metrics %>%
   distinct(predictors, response, terms, number) %>%

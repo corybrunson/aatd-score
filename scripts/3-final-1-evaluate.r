@@ -21,9 +21,12 @@ n_mults_fix <- 24L
 
 # optimized hyperparameters
 warning("Choose these hyperparameter values based on the CV results.")
-penalty_opt <- 10 ^ c(-4, 0)
+penalty_opt <- 10 ^ c(-4, -2)
 n_terms_opt <- c(7L, 10L)
 abs_bound_opt <- c(6L, 25L, 100L)
+
+# tolerable loss in specificity compared to COPD-based screening
+spec_loss <- 0.05
 
 #' Model specifications
 
@@ -100,6 +103,8 @@ read_rds(here::here("data/aatd-resp.rds")) %>%
   inner_join(aatd_test, by = "record_id") ->
   aatd_test
 
+aatd_test_id <- select(aatd_test, record_id)
+
 #' Specify pre-processing recipes
 
 # prepare regression recipe
@@ -147,16 +152,19 @@ recipe(aatd_train, geno_class ~ .) %>%
 
 # calculate proportions of abnormal genotypes by COPD
 aatd_train %>%
-  mutate(lung_hx_copd_emphysema_bronchitis =
-           lung_hx_copd | lung_hx_emphysema + lung_hx_chronic_bronchitis) %>%
-  group_by(geno_class, lung_hx_copd_emphysema_bronchitis) %>%
+  # mutate(lung_hx_copd_emphysema_bronchitis =
+  #          lung_hx_copd | lung_hx_emphysema | lung_hx_chronic_bronchitis) %>%
+  mutate(guidelines =
+           lung_hx_copd | lung_hx_emphysema | lung_hx_chronic_bronchitis |
+           liver_hx_cirrhosis) %>%
+  group_by(geno_class, guidelines) %>%
   count(name = "count") %>%
   ungroup() %>%
-  pivot_wider(lung_hx_copd_emphysema_bronchitis,
+  pivot_wider(guidelines,
               names_from = geno_class, values_from = count) %>%
   rowwise() %>%
   transmute(
-    score = as.integer(lung_hx_copd_emphysema_bronchitis),
+    score = as.integer(guidelines),
     .pred_Normal = Normal / (Abnormal + Normal),
     .pred_Abnormal = Abnormal / (Abnormal + Normal)
   ) %>%
@@ -166,9 +174,12 @@ aatd_train %>%
 
 # evaluate COPD as a predictor
 aatd_train %>%
-  mutate(lung_hx_copd_emphysema_bronchitis =
-           lung_hx_copd | lung_hx_emphysema + lung_hx_chronic_bronchitis) %>%
-  transmute(screen = lung_hx_copd_emphysema_bronchitis,
+  # mutate(lung_hx_copd_emphysema_bronchitis =
+  #          lung_hx_copd | lung_hx_emphysema | lung_hx_chronic_bronchitis) %>%
+  mutate(guidelines =
+           lung_hx_copd | lung_hx_emphysema | lung_hx_chronic_bronchitis |
+           liver_hx_cirrhosis) %>%
+  transmute(screen = guidelines,
             test = geno_class == "Abnormal") %>%
   count(screen, test, name = "count") %>%
   mutate(quadrant = case_when(
@@ -188,17 +199,23 @@ aatd_train %>%
 
 # predictions for testing data
 aatd_test %>%
-  mutate(lung_hx_copd_emphysema_bronchitis =
-           lung_hx_copd | lung_hx_emphysema + lung_hx_chronic_bronchitis) %>%
+  # mutate(lung_hx_copd_emphysema_bronchitis =
+  #          lung_hx_copd | lung_hx_emphysema | lung_hx_chronic_bronchitis) %>%
+  mutate(guidelines =
+           lung_hx_copd | lung_hx_emphysema | lung_hx_chronic_bronchitis |
+           liver_hx_cirrhosis) %>%
   transmute(class = geno_class,
-            score = as.integer(lung_hx_copd_emphysema_bronchitis)) %>%
-  left_join(aatd_copd_pred_tab, by = "score") ->
+            score = as.integer(guidelines)) %>%
+  left_join(aatd_copd_pred_tab, by = "score") %>%
+  select(-risk) %>%
+  bind_cols(aatd_test_id) ->
   aatd_copd_pred
 
 aatd_copd_pred %>%
   # pull(class) %>% levels()
   # NB: specify which level is the 'event'
-  roc_curve(truth = class, .pred_Abnormal, event_level = "first") ->
+  roc_curve(truth = class, score, event_level = "first") %>%
+  rename(score = .threshold) ->
   aatd_copd_roc
 aatd_copd_roc %>%
   ggplot(aes(x = specificity, y = sensitivity)) +
@@ -224,7 +241,7 @@ eval_data <- bind_rows(eval_data, tibble(
   model = "COPD", predictors = "COPD", response = resp,
   hyperparameters = list(tibble()),
   referent_risk = 0,
-  point_vals = list(c(lung_hx_copd_emphysema_bronchitis = 1)),
+  point_vals = list(c(guidelines = 1)),
   score_risk = list(select(aatd_copd_pred_tab, score, risk = .pred_Abnormal)),
   predictions = list(aatd_copd_pred),
   cutoff = list(aatd_copd_cut),
@@ -284,26 +301,29 @@ aatd_test_reg %>%
   rowwise() %>%
   mutate(score = sum(aatd_lr_pt * c_across(all_of(names(aatd_lr_pt))))) %>%
   ungroup() %>%
-  mutate(risk = 1 / (1 + exp(- aatd_lr_int - score))) %>%
-  select(score, risk) ->
+  # mutate(risk = 1 / (1 + exp(- aatd_lr_int - score))) %>%
+  select(score) ->
   aatd_lr_risk
 
 # evaluate logistic regression-based risk score
 bind_cols(
   select(aatd_test_reg, class = geno_class),
   mutate(
-    aatd_lr_risk,
+    left_join(aatd_lr_risk, aatd_lr_tab, by = "score"),
     .pred_Normal = 1 - risk,
     .pred_Abnormal = risk
   )
-) ->
+) %>%
+  select(class, score, starts_with(".pred_")) %>%
+  bind_cols(aatd_test_id) ->
   aatd_lr_pred
 
 # cutoffs for specificity near that of COPD recommendation
 aatd_lr_pred %>%
   # pull(class) %>% levels()
   # NB: specify which level is the 'event'
-  roc_curve(truth = class, .pred_Abnormal, event_level = "second") ->
+  roc_curve(truth = class, score, event_level = "second") %>%
+  rename(score = .threshold) ->
   aatd_lr_roc
 aatd_lr_roc %>%
   ggplot(aes(x = specificity, y = sensitivity)) +
@@ -311,6 +331,7 @@ aatd_lr_roc %>%
   geom_path() +
   geom_abline(intercept = 1, slope = -1, lty = 3)
 aatd_lr_roc %>%
+  filter(specificity >= aatd_copd_table$specificity - spec_loss) %>%
   slice_min(abs(specificity - aatd_copd_table$specificity), n = 1L) %>%
   as_tibble() ->
   aatd_lr_cut
@@ -319,13 +340,14 @@ aatd_lr_roc %>%
 aatd_lr_pred %>%
   mutate(
     .pred_class = factor(
-      ifelse(.pred_Abnormal > aatd_lr_cut$.threshold, "Abnormal", "Normal"),
+      ifelse(score >= aatd_lr_cut$score, "Abnormal", "Normal"),
       levels = levels(aatd_test_reg$geno_class)
     )
   ) %>%
   # NB: correct order of factors for `metrics()`
-  mutate(across(c(class, .pred_class), fct_rev)) %>%
-  metrics(truth = class, estimate = .pred_class, .pred_Abnormal) ->
+  # (removed b/c shouldn't matter when not being used to build an ROC curve)
+  # mutate(across(c(class, .pred_class), fct_rev)) %>%
+  metrics(truth = class, estimate = .pred_class, .pred_Normal) ->
   aatd_lr_met
 
 # append to evaluation data
@@ -386,7 +408,8 @@ aatd_rso <- fr$RiskScoreOptimizer(
 aatd_rso$optimize()
 
 # save results and destroy optimizer
-# https://github.com/jiachangliu/FasterRisk/blob/main/src/fasterrisk/fasterrisk.py#L102
+# https://github.com/jiachangliu/FasterRisk/
+# blob/main/src/fasterrisk/fasterrisk.py#L102
 aatd_rso_res <- aatd_rso$get_models()
 rm(aatd_rso)
 
@@ -407,17 +430,19 @@ aatd_fr_pt <- aatd_rsc$coefficients
 names(aatd_fr_pt) <- names(aatd_lr_pt)
 
 # calculate probability conversion
-# https://github.com/jiachangliu/FasterRisk/blob/main/src/fasterrisk/fasterrisk.py#L147
-# https://github.com/jiachangliu/FasterRisk/blob/main/src/fasterrisk/fasterrisk.py#L164
+# https://github.com/jiachangliu/FasterRisk/
+# blob/main/src/fasterrisk/fasterrisk.py#L147
+# https://github.com/jiachangliu/FasterRisk/
+# blob/main/src/fasterrisk/fasterrisk.py#L164
 # NB: this is the integer score, without the intercept or multiplier
 # tibble(score = seq(0, sum(aatd_fr_pt))) %>%
 #   mutate(risk = 1 / (1 + exp(- aatd_rsc$intercept - score))) ->
 #   aatd_fr_tab
 tibble(score = seq(
-  aatd_rsc$intercept + sum(pmin(aatd_fr_pt, 0)),
-  aatd_rsc$intercept + sum(pmax(aatd_fr_pt, 0))
+  sum(pmin(aatd_fr_pt, 0)),
+  sum(pmax(aatd_fr_pt, 0))
 )) %>%
-  mutate(score_adj = score / aatd_rsc$multiplier) %>%
+  mutate(score_adj = (aatd_rsc$intercept + score) / aatd_rsc$multiplier) %>%
   mutate(risk = 1 / (1 + exp(- score_adj))) ->
   aatd_fr_tab
 
@@ -426,9 +451,9 @@ aatd_test_int %>%
   rowwise() %>%
   mutate(score = sum(aatd_fr_pt * c_across(all_of(names(aatd_fr_pt))))) %>%
   ungroup() %>%
-  mutate(risk = 1 /
-           (1 + exp(- (aatd_rsc$intercept + score) / aatd_rsc$multiplier))) %>%
-  select(score, risk) ->
+  # mutate(risk = 1 /
+  #          (1 + exp(- (aatd_rsc$intercept + score) / aatd_rsc$multiplier))) %>%
+  select(score) ->
   aatd_fr_risk
 
 # summarize results from model fit
@@ -438,20 +463,22 @@ aatd_fr_risk %>%
   # .pred_class = as.integer(aatd_rsc$predict(X_test)),
   .pred_Normal = as.vector(1 - aatd_rsc$predict_prob(X_test)),
   .pred_Abnormal = as.vector(aatd_rsc$predict_prob(X_test)),
-  select(aatd_test_int, geno_class)
+  select(aatd_test_int, class = geno_class)
 ) %>%
   # restore factor levels
   mutate(across(
-    any_of(c(".pred_class", "geno_class")),
+    any_of(c(".pred_class", "class")),
     ~ factor(ifelse(. == 1L, "Abnormal", "Normal"), c("Normal", "Abnormal"))
-  )) ->
+  )) %>%
+  bind_cols(aatd_test_id) ->
   aatd_fr_pred
 
 # cutoffs for specificity near that of COPD recommendation
 aatd_fr_pred %>%
   # pull(geno_class) %>% levels()
   # NB: specify which level is the 'event'
-  roc_curve(truth = geno_class, .pred_Abnormal, event_level = "second") ->
+  roc_curve(truth = class, score, event_level = "second") %>%
+  rename(score = .threshold) ->
   aatd_fr_roc
 aatd_fr_roc %>%
   ggplot(aes(x = specificity, y = sensitivity)) +
@@ -459,6 +486,7 @@ aatd_fr_roc %>%
   geom_path() +
   geom_abline(intercept = 1, slope = -1, lty = 3)
 aatd_fr_roc %>%
+  filter(specificity >= aatd_copd_table$specificity - spec_loss) %>%
   slice_min(abs(specificity - aatd_copd_table$specificity), n = 1L) %>%
   as_tibble() ->
   aatd_fr_cut
@@ -467,11 +495,11 @@ aatd_fr_roc %>%
 aatd_fr_pred %>%
   mutate(
     .pred_class = factor(
-      ifelse(.pred_Abnormal > aatd_fr_cut$.threshold, "Abnormal", "Normal"),
-      levels = levels(aatd_fr_pred$geno_class)
+      ifelse(score >= aatd_fr_cut$score, "Abnormal", "Normal"),
+      levels = levels(aatd_fr_pred$class)
     )
   ) %>%
-  metrics(truth = geno_class, estimate = .pred_class, .pred_Normal) ->
+  metrics(truth = class, estimate = .pred_class, .pred_Normal) ->
   aatd_fr_met
 
 # append to evaluation data
@@ -491,7 +519,7 @@ eval_data <- bind_rows(eval_data, tibble(
 }
 }
 
-write_rds(eval_data, here::here("data/aatd-2-eval-final.rds"))
+write_rds(eval_data, here::here("data/aatd-3-eval-final.rds"))
 
 }#LOOP
 }#LOOP

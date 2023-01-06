@@ -9,6 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
                       fig.width = 8)
 library(tidyverse)
+library(lubridate)
 library(tidymodels)
 source(here::here("code/settings.r"))
 theme_set(theme_bw())
@@ -145,7 +146,7 @@ For each set of predictors and responses, we retrieved six models from the ensem
 At the task of predicting SZ or any abnormal genotype, these models performed equally well (or poorly); at the task of predicting ZZ genotype, they were clearly inferior to the linear and distance-based models.
 
 Below, we superimpose ROC curves for the collections of FR models and for the LR and NN models in order to better compare their performance.
-While FR does not measure up when predicting ZZ, especially from only medical history, it becomes more competitive as all models weaken on the other predictive tasks.
+While most FR models underperform LR when predicting ZZ, especially from only medical history, they become more competitive as all models weaken on the other predictive tasks.
 
 ```{r roc plots for best ML and FR, fig.height=10}
 aatd_mod_res_pred %>%
@@ -170,10 +171,10 @@ aatd_mod_res_pred %>%
 
 #### Sensitivity gain
 
-The ROC curves suggest that ZZ and, less so, SZ/ZZ genotypes are significantly easier to predict than arbitrary abnormal genotypes, and they demonstrate a modest benefit to including smoking history in most models but an uncertain benefit to including gender.
+The ROC curves suggest that more precise abnormal genotypes are significantly easier to predict, and they demonstrate a modest benefit to including smoking history in most models.
 As evaluated on our data, the standard recommendation underperforms random screening for SZ/ZZ and for arbitrary abnormal genotype, though it does provide a slight benefit in screening for ZZ.
 
-Sensitivity is more valuable than specificity in our context: The potential cost of missing an abnormal AAT genotype is much higher than that of an unnecessary screen.
+Sensitivity is more valuable than specificity in our context: The potential cost of missing an abnormal AAT genotype is much higher than that of an unnecessary screen, and the primary goal of a new screening recommendation will be to successfully identify more abnormal genotypes.
 Our primary focus, then, is the top half-space of each ROC plot.
 Troublingly, COPD-based screening shows lower sensitivity than random screening for all three abnormal genotype sets, though only slightly in the case of ZZ.
 The NN and RF models show little difference from random screening toward the top-left corner of each plot, and the LR and LDA models show much clearer improvement with the addition of gender or smoking history as predictors and only minor (< 5%) improvement without.
@@ -260,9 +261,9 @@ aatd_mod_res_pred %>%
   theme(legend.position = "right")
 ```
 
-The greatest improvements in ZZ prediction over random screening are limited to the LR, LDA, NN, SVM, and FR models and range from 15 to 25 percentage points.
+The greatest improvements in ZZ prediction over random screening are limited to the LR, LDA, NN, SVM, and FR models and range from 13 to 29 percentage points; though these improvements are much less consistent for the SVM models.
 These obtain near 50% specificity, which makes for useful comparisons against COPD-based screening.
-For ZZ prediction (see the plot), the LR, LDA, and FR models obtain between 9 and 21 percentage point improvement over COPD-based screening in sensitivity subject to a specificity loss of less than 5 percentage points.
+For ZZ prediction (see the plot), the LR, LDA, and FR models obtain up to a 12 percentage point improvement over COPD-based screening in sensitivity subject to a specificity loss of less than 5 percentage points.
 
 ### Precision--recall curves
 
@@ -431,7 +432,7 @@ Measured by area under the ROC curve, LR models showed highest performance and r
 Most FR models improved upon RF and NN models but underperformed LR models.
 This is not unexpected; FR models are derived from LR models and comprise a subclass subject to additional constraints. But the narrow margins by which LR models outperform (some) FR models suggest that either may be the best approach. (Optimized LR models must be transformed into usable risk scores, at some cost to their performance that cannot be known in advance.)
 
-Among the LR models, the inclusion of gender did not improve performance by either measure, but the inclusion of smoking history led to consistent, though not highly significant, improvement (a less than 0.01% increase in accuracy and a less than 5% increase in AUROC).
+Among the LR models, the inclusion of gender did not improve performance by either measure, but the inclusion of smoking history led to consistent and detectable improvement, though a less than 0.01% increase in accuracy and a less than 5% increase in AUROC.
 Among the FR models, only use history (not exposure history) provided substantial gains in performance over the history-only variable set.
 
 ### Optimized parameter settings
@@ -533,7 +534,7 @@ aatd_fr_metrics %>%
 ```
 
 It appears that the number of terms is less consequential than the point bounds, though we compared models using a larger spread of the latter. (The bounds seem more important when predicting genotype either SZ or ZZ in contrast to others.)
-We see AUROC improvements of between $0.03$ and $0.04$ from the strictest to the loosest parameter settings.
+We see AUROC improvements of between $0.02$ and $0.04$ from the strictest to the loosest parameter settings.
 We will need to decide whether additional terms or larger scores are warranted for a roughly 3-point gain in AUROC---though the gains are smaller when using only medical history to predict genotype.
 
 # Phase 3: Model evaluation
@@ -566,7 +567,7 @@ $$p = \frac{1}{1 + \exp(s)}$$
 ### Final evaluation
 
 ```{r read in final model evaluations}
-eval_data <- read_rds(here::here("data/aatd-2-eval-final.rds"))
+eval_data <- read_rds(here::here("data/aatd-3-eval-final.rds"))
 ```
 
 We evaluate the selected model specifications (families and hyperparameter sets) by first fitting them to the entire $\frac{4}{5}$ training set from the second phase and then evaluating their predictions on the remaining $\frac{1}{5}$ testing set.
@@ -600,15 +601,11 @@ eval_data %>%
     predictions,
     ~ rename_with(., function(x) str_remove(x, "^geno_"))
   )) %>%
-  # restrict to best-performing models
-  # unnest(metrics) %>% filter(.metric == "roc_auc") %>%
-  # pull(.estimate) %>% hist()
-  # filter(.estimate > 0.6) %>%
   unnest(hyperparameters) %>%
   unnest(predictions) %>%
+  mutate(score = as.integer(score)) %>%
   group_by(predictors, response, family, abs_bound, model) %>%
-  roc_curve(truth = class, estimate = .pred_Abnormal,
-            event_level = "second") %>%
+  roc_curve(truth = class, estimate = score, event_level = "second") %>%
   ggplot(aes(x = specificity, y = sensitivity, group = model)) +
   facet_grid(cols = vars(predictors)) +
   coord_equal() +
@@ -690,28 +687,62 @@ The two higher-resolution risk scores detect the difference between the minimum 
 Higher resolutions also introduce considerable gaps in some cases, though they do introduce intermediate-risk values within the gaps present in the lower-resolution risk scores.
 At least for the FasterRisk models, a point bound of 25 seems most useful; the benefit is less clear among the logistic regression models.
 
-### Item point values in candidate models
+## Item point values in candidate models
 
-```{r compare coefficients of candidate models}
+```{r prepare point values}
 eval_data %>%
-  filter(model != "COPD" & predictors == "Dx") %>%
   mutate(model = fct_inorder(model)) %>%
-  # restrict to best-performing models
+  # focus only on AUROC
   unnest(metrics) %>% filter(.metric == "roc_auc") %>%
-  # filter(.estimate > 0.55) %>%
   # distinguish FR models (necessary for pivoting below)
   mutate(number = case_when(
     model == "FasterRisk" ~ as.character((row_number() - 1L) %% 2L + 1L),
     TRUE ~ NA_character_
   )) %>%
-  select(-predictors, -response) %>%
   mutate(point_vals = map(
     point_vals,
     enframe, name = "item", value = "points"
   )) %>%
-  unnest(point_vals) %>%
-  mutate(item = pred_names[item]) ->
+  mutate(AUROC = format(.estimate, digits = 3L, nsmall = 3L)) %>%
+  mutate(specification = map_chr(
+    hyperparameters,
+    ~ str_c(names(.), unlist(.), sep = " = ", collapse = ", ")
+  )) %>%
+  mutate(specification = ifelse(
+    model == "FasterRisk", str_c(specification, "; #", number), specification
+  )) %>%
+  unnest(hyperparameters, keep_empty = TRUE) %>%
+  mutate(model_penal = case_when(
+    model == "COPD" ~ "COPD",
+    model == "logistic regression" ~
+      str_c("LR", " (penalty = ", format(penalty, scientific = FALSE), ")"),
+    model == "FasterRisk" ~
+      str_c("FR", " #", number, " (terms ≤ ", n_terms, ")")
+  )) %>%
+  mutate(model_specs = case_when(
+    model == "COPD" ~ "COPD",
+    model == "logistic regression" ~
+      str_c("LR (penalty = ", format(penalty, scientific = FALSE),
+            "; bound = ", abs_bound, ")"),
+    model == "FasterRisk" ~
+      str_c("FR #", number, " (terms ≤ ", n_terms,
+            "; bound = ", abs_bound, ")")
+  )) %>%
+  # remove duplicate COPD model
+  distinct() ->
   eval_points
+```
+
+### Medical history only
+
+```{r compare coefficients of candidate Dx models}
+eval_points %>%
+  filter(model != "COPD" & predictors == "Dx" & response == "ZZ") %>%
+  select(-predictors, -response) %>%
+  unnest(point_vals) %>%
+  mutate(item = pred_names[item]) %>%
+  mutate(points = as.integer(points)) ->
+  eval_points_med
 ```
 
 The table below compares the point values of the predictor items across all candidate models.
@@ -721,14 +752,8 @@ Then, we should assess whether any estimated improvement in performance makes ot
 For ease of viewing, the items are sorted by greatest (ever) point value.
 Areas under the ROC curve are reported in the rightmost column.
 
-```{r coefficient table}
-eval_points %>%
-  mutate(AUROC = format(.estimate, digits = 3L, nsmall = 3L)) %>%
-  mutate(specification = map_chr(
-    hyperparameters,
-    ~ str_c(names(.), unlist(.), sep = " = ", collapse = ", ")
-  )) %>%
-  mutate(points = as.integer(points)) %>%
+```{r Dx coefficient table}
+eval_points_med %>%
   # sort by largest coefficients
   mutate(item = fct_rev(fct_reorder(item, points, function(x) max(abs(x))))) %>%
   pivot_wider(c(model, specification, number, AUROC),
@@ -744,20 +769,16 @@ eval_points %>%
 
 The relative magnitudes of the point values are visually compared in the plot below.
 
-```{r coefficient plot, fig.height=9}
-eval_points %>%
-  unnest(hyperparameters) %>%
-  mutate(model = ifelse(
-    model == "FasterRisk",
-    str_c("FR", " #", number, " (terms ≤ ", n_terms, ")"),
-    str_c("LR", " (penalty = ", format(penalty, scientific = FALSE), ")")
-  )) %>%
-  mutate(model = fct_inorder(model)) %>%
+```{r Dx coefficient plot, fig.height=9}
+eval_points_med %>%
+  mutate(model_penal = fct_inorder(model_penal)) %>%
   mutate(abs_bound = fct_reorder(str_c("points ≤ ", abs_bound), abs_bound)) %>%
-  mutate(item = fct_reorder(item, points, function(x) max(abs(x)))) %>%
+  # mutate(item = fct_reorder(item, points, function(x) max(abs(x)))) %>%
+  mutate(item = factor(item, levels = unname(pred_names))) %>%
   mutate(sign = factor(sign(points), levels = c("-1", "1"))) %>%
   ggplot(aes(x = points, y = item, fill = sign)) +
-  facet_grid(rows = vars(model), cols = vars(abs_bound), scales = "free_x") +
+  facet_grid(rows = vars(model_penal), cols = vars(abs_bound),
+             scales = "free_x") +
   geom_vline(xintercept = 0) +
   geom_col() +
   scale_fill_discrete(aesthetics = c("color", "fill"), guide = "none") +
@@ -766,13 +787,402 @@ eval_points %>%
 
 On inspection, the following candidates stand out as exceptional:
 
-* The logistic regression model with low penalty and point value bound 25, which has an AUROC estimate of 0.576 using 9 (of 10) items. It matches the performance of two more complicated models, one with higher point values and the other with an additional term (family history of COPD).
-* The FasterRisk model with 7 items and a point value bound of 100 (though actual highest point value 13), with estimated AUROC 0.575. It omits hepatitis and COPD as well as family history of COPD and matches the performance of some more complicated models.
-* An assortment of FasterRisk models with 6 terms each and point values below 10 that achieve AUROC estimates of 0.565. Compared to the above, these additionally exclude allergies as an item, as well as hepatitis, COPD, and family history of COPD. This may be valuable in that, when used, allergies and asthma have negative point values.
-* The FasterRisk model with 10-term and 6-point value limits that achieves the AUROC estimate 0.550. It uses only 6 terms, excluding allergies and asthma but including hepatitis, with positive point values at most 5, so is the simplest of the candidates (excluding the poorly-performing LR model).
+1. The logistic regression model with low penalty and point value bound 25, which has an AUROC estimate of 0.618 using all 12 items. It approximately matches or exceeds the performance of the LR models with larger point value bounds.
+2. The second FasterRisk model with a 10-item limit and point value bound 25, which approximately matches the performance of the aforementioned models at an AUROC of 0.617.
+3. The first FasterRisk model with a 10-item limit and point value bound 100, which at AUROC 0.606 has similar performance to the other model obtained from the same batch. They both exclude self-reported COPD and family history of COPD, and this model excludes jaundice as an item whereas the other excludes bronchitis.
 
-### ZZ cases recovered by inclusion of smoking history
+```{r select medical history candidates}
+candidates_med <- c(
+  `Candidate 1` = "LR (penalty = 0.0001; bound = 25)",
+  `Candidate 2` = "FR #2 (terms ≤ 10; bound = 25)",
+  `Candidate 3` = "FR #1 (terms ≤ 10; bound = 100)"
+)
+```
+
+### Medical and smoking history
+
+```{r compare coefficients of candidate Dx & smoking models}
+eval_points %>%
+  filter(model != "COPD" & predictors == "Dx+smoke use" & response == "ZZ") %>%
+  select(-predictors, -response) %>%
+  unnest(point_vals) %>%
+  mutate(item = pred_names[item]) %>%
+  mutate(points = as.integer(points)) ->
+  eval_points_smoke
+```
+
+```{r Dx & smoking coefficient table}
+eval_points_smoke %>%
+  # sort by largest coefficients
+  mutate(item = fct_rev(fct_reorder(item, points, function(x) max(abs(x))))) %>%
+  pivot_wider(c(model, specification, number, AUROC),
+              names_from = item, values_from = points, names_sort = TRUE) %>%
+  # remove items that are never used
+  select(where(~ ! all(. == 0))) %>%
+  select(-number) %>%
+  # sort by largest coefficients
+  arrange(across(c(-model, -specification, -AUROC), desc)) %>%
+  relocate(AUROC, .after = everything()) %>%
+  knitr::kable()
+```
+
+```{r Dx & smoking coefficient plot, fig.height=9}
+eval_points_smoke %>%
+  mutate(model_penal = fct_inorder(model_penal)) %>%
+  mutate(abs_bound = fct_reorder(str_c("points ≤ ", abs_bound), abs_bound)) %>%
+  # mutate(item = fct_reorder(item, points, function(x) max(abs(x)))) %>%
+  mutate(item = factor(item, levels = unname(pred_names))) %>%
+  mutate(sign = factor(sign(points), levels = c("-1", "1"))) %>%
+  ggplot(aes(x = points, y = item, fill = sign)) +
+  facet_grid(rows = vars(model_penal), cols = vars(abs_bound),
+             scales = "free_x") +
+  geom_vline(xintercept = 0) +
+  geom_col() +
+  scale_fill_discrete(aesthetics = c("color", "fill"), guide = "none") +
+  labs(x = "Point value", y = NULL, fill = NULL)
+```
+
+Through discussion, we identified the following two models as of the greatest interest:
+
+4. The logistic regression model with low penalty and point value bound 25, which achieves an estimated AUROC of 0.657. This nearly matches the best performance, by a more complicated LR model with a point value bound of 100. The model includes all 13 items.
+5. The first FasterRisk model with a 10-item limit and point value bound of 100, which achieves an AUROC of 0.654, similar to that of several other FR models. It excludes both bronchitis and jaundice as well as self and family history of COPD.
+
+```{r select medical and smoking history candidates}
+candidates_smoke <- c(
+  `Candidate 4` = "LR (penalty = 0.0001; bound = 25)",
+  `Candidate 5` = "FR #1 (terms ≤ 10; bound = 100)"
+)
+```
+
+## Risk scores and screening thresholds
+
+```{r restrict to candidate scores}
+eval_points %>%
+  select(model, predictors, response,
+         referent_risk, point_vals, score_risk, predictions, cutoff,
+         AUROC, model_specs) %>%
+  filter(
+    model == "COPD" |
+      (predictors == "Dx" & model_specs %in% candidates_med) |
+      (predictors == "Dx+smoke use" & model_specs %in% candidates_smoke)
+  ) %>%
+  mutate(candidate = case_when(
+    model == "COPD" ~ "Candidate 0",
+    predictors == "Dx" ~
+      names(candidates_med)[match(model_specs, candidates_med)],
+    predictors == "Dx+smoke use" ~
+      names(candidates_smoke)[match(model_specs, candidates_smoke)]
+  )) %>%
+  arrange(candidate) ->
+  eval_cands
+```
+
+Here we recapitulate the five candidate models identified from the comparisons above:
+
+```{r candidates coefficient table}
+eval_cands %>%
+  filter(model != "COPD") %>%
+  select(-predictors, -response) %>%
+  unnest(point_vals) %>%
+  mutate(item = pred_names[item]) %>%
+  mutate(points = as.integer(points)) %>%
+  mutate(item = factor(item, levels = unname(pred_names))) %>%
+  pivot_wider(c(candidate, AUROC),
+              names_from = item, values_from = points, names_sort = TRUE) %>%
+  # sort by largest coefficients
+  arrange(candidate) %>%
+  relocate(AUROC, .after = everything()) %>%
+  knitr::kable()
+```
+
+### Score--risk tables
+
+The five models produce the following risk score tables.
+Each table matches each value of one risk score to the estimated probability of a patient with that score having a ZZ genotype.
+
+```{r examine risk scores, results='asis'}
+for (r in seq(nrow(eval_cands))) {
+  eval_cands %>%
+    slice(r) %>%
+    unnest(score_risk) %>%
+    mutate(score = ifelse(
+      model == "FasterRisk",
+      score - referent_risk, score
+    )) %>%
+    unnest(cutoff) %>%
+    mutate(counts = map(predictions, ~ count(., score))) %>%
+    mutate(counts = map(counts, ~ arrange(., desc(score)))) %>%
+    mutate(counts = map(counts, ~ mutate(., screen = cumsum(n) / sum(n)))) %>%
+    mutate(counts = map(counts, ~ arrange(., score))) %>%
+    mutate(counts = map2(score, counts, ~ filter(.y, score == .x))) %>%
+    mutate(counts = map(counts, ~ select(., screen))) %>%
+    unnest(counts) %>%
+    transmute(
+      Score = str_c(
+        score, ifelse(risk >= .threshold & lag(risk < .threshold), "*", "")
+      ),
+      Risk = str_c(
+        format(round(risk, digits = 3L) * 100, nsmall = 1L, trim = TRUE), "%"
+      ),
+      Screen = str_c(
+        format(round(screen, digits = 3L) * 100, nsmall = 1L), "%"
+      )
+    ) %>%
+    knitr::kable(
+      align = "lrr",
+      caption = eval_cands$candidate[[r]],
+      label = NA,
+      format = "html", table.attr = "style='width:30%;'"
+    ) %>%
+    print()
+}
+```
+
+### ROC curves
+
+```{r compare overall performance}
+eval_cands %>%
+  mutate(predictions = map(
+    predictions,
+    ~ rename_with(., function(x) str_remove(x, "^geno_"))
+  )) %>%
+  unnest(predictions) %>%
+  mutate(class = factor(class, c("Normal", "Abnormal"))) %>%
+  group_by(candidate) %>%
+  roc_curve(truth = class, estimate = score, event_level = "second") %>%
+  ggplot(aes(x = specificity, y = sensitivity, group = candidate)) +
+  coord_equal() +
+  geom_path(aes(color = candidate)) +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
+  scale_color_manual(values = c("black", RColorBrewer::brewer.pal(
+    n = length(candidates_med) + length(candidates_smoke),
+    name = "Dark2"
+  ))) +
+  labs(color = NULL)
+```
+
+```{r plot separate ROC curves with score labels, fig.height=8}
+eval_cands %>%
+  mutate(predictions = map(
+    predictions,
+    ~ rename_with(., function(x) str_remove(x, "^geno_"))
+  )) %>%
+  unnest(predictions) %>%
+  mutate(class = factor(class, c("Normal", "Abnormal"))) %>%
+  group_by(candidate) %>%
+  roc_curve(truth = class, estimate = score, event_level = "second") %>%
+  mutate(label = case_when(
+    .threshold == -Inf ~ "-∞",
+    .threshold == Inf ~ "+∞",
+    TRUE ~ as.character(.threshold)
+  )) %>%
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  facet_wrap(facets = vars(candidate)) +
+  coord_equal() +
+  geom_path() +
+  geom_text(aes(label = label), hjust = "left", vjust = "bottom") +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
+  labs(color = NULL)
+```
+
+### Screening thresholds
+
+```{r compare threshold performance}
+eval_cands %>%
+  unnest(cutoff) %>%
+  # determine score at which risk cutoff is passed
+  mutate(cutoff = map2_int(
+    score_risk, .threshold,
+    ~ .x$score[which(.x$risk >= .y & lag(.x$risk) < .y)]
+  )) %>%
+  mutate(cutoff = ifelse(
+    model == "FasterRisk",
+    cutoff - referent_risk, cutoff
+  )) %>%
+  transmute(
+    Candidate = candidate,
+    `Score cutoff` = as.integer(cutoff), `Risk cutoff` = .threshold,
+    Sensitivity = sensitivity, Specificity = specificity
+  ) %>%
+  mutate(across(
+    where(is.double),
+    ~ str_c(format(round(., digits = 4L) * 100, digits = 4L), "%")
+  )) %>%
+  knitr::kable(format = "html", table.attr = "style='width:50%;'")
+```
+
+### Detection tables
+
+```{r, results='asis'}
+eval_cands %>%
+  unnest(cutoff) %>%
+  unnest(predictions) %>%
+  # OOPS
+  mutate(class = ifelse(
+    is.na(class),
+    as.character(geno_class),
+    as.character(class)
+  )) %>%
+  mutate(class = factor(class, c("Normal", "Abnormal"))) %>%
+  group_by(candidate) %>%
+  mutate(
+    .pred_class = factor(
+      ifelse(.pred_Abnormal >= .threshold, "Abnormal", "Normal"),
+      levels = levels(class)
+    )
+  ) %>%
+  count(candidate, class, .pred_class) %>%
+  transmute(
+    Candidate = candidate, Genotype = class,
+    Amount = str_c(
+      n, " (",
+      format(round(n / sum(n), digits = 4L) * 100, digits = 2L),
+      "%)"
+    ),
+    Screen = factor(ifelse(.pred_class == "Normal", "No", "Yes"),
+                    levels = c("No", "Yes"))
+  ) %>%
+  ungroup() %>%
+  pivot_wider(c(Candidate, Screen),
+              names_from = Genotype, values_from = Amount) %>%
+  nest(table = -c(Candidate)) %>%
+  pull(table) %>%
+  `names<-`(eval_cands$candidate) %>%
+  lapply(knitr::kable, align = "lrr",
+         format = "html", table.attr = "style='width:30%;'")
+```
+
+### Additional ZZ cases recovered by inclusion of smoking history
+
+```{r}
+eval_cands %>%
+  filter(candidate == "Candidate 3" | candidate == "Candidate 5") %>%
+  select(candidate, cutoff, predictions) %>%
+  unnest(cutoff) %>%
+  unnest(predictions) %>%
+  transmute(
+    record_id, candidate,
+    screen = ifelse(.pred_Abnormal >= .threshold, "Y", "N"),
+    genotype = geno_class
+  ) %>%
+  filter(genotype == "Abnormal") %>%
+  pivot_wider(names_from = candidate, values_from = screen) %>%
+  select(
+    record_id,
+    Dx = `Candidate 3`, Dx_smoke = `Candidate 5`
+  ) %>%
+  filter(Dx != Dx_smoke) %>%
+  arrange(Dx, Dx_smoke) %>%
+  left_join(read_rds(here::here("data/aatd-pred.rds")), by = "record_id") %>%
+  mutate(birth = year(date_of_birth), gender = str_sub(gender, 1L, 1L)) %>%
+  select(
+    birth, gender,
+    any_of(names(pred_names)), smoking_use,
+    Dx, Dx_smoke
+  ) %>%
+  select(-ends_with("_none")) %>%
+  mutate(across(
+    c(starts_with("lung_"), starts_with("liver_")),
+    as.integer
+  )) %>%
+  rename_with(~ pred_names[.], any_of(names(pred_names))) %>%
+  knitr::kable()
+```
+
+## Patient prototypes
+
+We compute risk scores for a set of prototype patient histories and examine the relative contributions of the items that constitute the score.
+
+```{r define hypothetical and challenge subjects}
+which_of_n <- function(x, n) {
+  res <- rep(0L, n)
+  x <- x[x >= 0 & x <= n]
+  res[x] <- 1L
+  res
+}
+tibble(
+  subject = c(seq(8), LETTERS[seq(4)], "X"),
+  lung_hx_aat_deficiency_family = which_of_n(c(6,8), 13),
+  liver_hx_cirrhosis = which_of_n(c(2,4), 13),
+  lung_hx_chronic_bronchitis = which_of_n(c(3), 13),
+  lung_hx_emphysema = which_of_n(c(1,2,5,9,11), 13),
+  lung_hx_bronchiectasis = which_of_n(c(2), 13),
+  liver_hx_hepatitis = which_of_n(c(), 13),
+  liver_hx_abnormal_liver_function_test = which_of_n(c(4,12), 13),
+  lung_hx_allergies = which_of_n(c(3,6,7,10), 13),
+  liver_hx_jaundice = which_of_n(c(), 13),
+  lung_hx_asthma = which_of_n(c(7), 13),
+  lung_hx_copd = which_of_n(c(3,5,6), 13),
+  lung_hx_family_history_copd = which_of_n(c(1,2,6,7,8,10,11), 13),
+  smoking_use_Past = which_of_n(c(1,5,8,9,10), 13),
+  smoking_use_Current = which_of_n(c(2,4,7,11), 13)
+) %>%
+  mutate(scenario = c(
+    vector("list", 8L),
+    list(
+      "76-year-old male with OSA on BiPAP, morbid obesity, CAD s/p PCI, and AFib. He has a 32 pack-year history of tobacco use. PFTs show a moderate OVD without BDR. No personal history of liver disease. No family history of COPD. CT chest shows mild emphysematous changes in the apices.",
+      "42-year-old female with DM1, allergies, and ESRD s/p renal transplant. Previous tobacco use, 7 pack-year history. Father with COPD. PFTs show a mild OVD and normal DLCO. Chest x-ray has mild hyperinflation.",
+      "68-year-old female with depression/anxiety, hypertension, GERD, and chronic cough. Active tobacco use, 1/2 – 1 PPD x 42 years. PFTs show moderate OVD. CT chest shows mild emphysematous changes with tree-in-bud opacities. Sputum cultures recently grew MAC. History of father with COPD.",
+      "47-year-old man with morbid obesity, hypertension, hyperlipidemia, GERD, DM2, NAFLD, ocassional alcohol use, and never smoker. AST/ALT mildly elevated. No jaundice and normal bilirubin. No family history of COPD. PFTs show RVD with normal DLCO."
+    ),
+    vector("list", 1L)
+  )) ->
+  subjects
+```
+
+```{r compute risk scores for challenge patients, results='asis'}
+eval_cands %>%
+  select(model, candidate, referent_risk, point_vals, score_risk, cutoff) %>%
+  unnest(point_vals) %>%
+  unnest(cutoff) %>% select(-sensitivity, -specificity) %>%
+  mutate(points = as.integer(points)) %>%
+  mutate(cutoff = map2_int(
+    score_risk, .threshold,
+    ~ pull(filter(.x, risk == .y), score)
+  )) %>%
+  mutate(cutoff = ifelse(
+    model == "FasterRisk",
+    cutoff - referent_risk, cutoff
+  )) %>%
+  select(candidate, item, points, cutoff) ->
+  cand_points
+subjects %>%
+  select(-scenario) %>%
+  pivot_longer(-subject, names_to = "item", values_to = "entry") %>%
+  inner_join(cand_points, by = "item") %>%
+  mutate(value = entry * points) %>%
+  mutate(item = pred_names[item]) ->
+  subjects_cand_points
+subjects_cand_points %>%
+  pivot_wider(c(subject, candidate),
+              names_from = item, values_from = value) %>%
+  rowwise() %>%
+  mutate(total = sum(c_across(where(is.integer)), na.rm = TRUE)) %>%
+  ungroup() %>%
+  pivot_longer(-c(candidate, subject),
+               names_to = "item", values_to = "value") %>%
+  left_join(select(
+    subjects_cand_points,
+    candidate, subject, item, points, entry, value
+  )) %>%
+  mutate(tally = case_when(
+    is.na(value) ~ "--",
+    entry == 0L ~ "",
+    # value == 0L ~ "",
+    TRUE ~ format(value)
+  )) %>%
+  pivot_wider(c(candidate, subject),
+              names_from = item, values_from = tally) %>%
+  relocate(candidate, subject, any_of(unname(pred_names))) %>%
+  left_join(distinct(subjects_cand_points, candidate, subject, cutoff)) %>%
+  mutate(screen = ifelse(as.integer(total) >= cutoff, "Y", "N")) %>%
+  nest(score = -c(candidate)) %>%
+  {`names<-`(.$score, .$candidate)} %>%
+  lapply(knitr::kable, align = c())
+```
 
 
+
+# Phase 4: Final model(s)
 
 ## Final model

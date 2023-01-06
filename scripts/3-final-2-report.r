@@ -4,7 +4,7 @@ library(tidyverse)
 library(tidymodels)
 
 # read in evaluations on testing data
-eval_data <- read_rds(here::here("data/aatd-2-eval-final.rds"))
+eval_data <- read_rds(here::here("data/aatd-3-eval-final.rds"))
 
 # receiver operating characteristic curves
 eval_data %>%
