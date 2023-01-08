@@ -134,7 +134,7 @@ read_rds(here::here("data/aatd-pred.rds")) %>%
 for (i_pred in seq_along(vars_predictors)) {#LOOP
 for (i_resp in seq_along(vars_response)) {#LOOP
 
-if (i_pred < ii[[1L]] || (i_pred == ii[[1L]] && i_resp <= ii[[2L]])) next
+if (i_pred < ii[[1L]] || (i_pred == ii[[1L]] && i_resp < ii[[2L]])) next
 
 pred <- names(vars_predictors)[[i_pred]]
 resp <- names(vars_response)[[i_resp]]
