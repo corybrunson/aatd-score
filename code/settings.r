@@ -59,6 +59,9 @@ pred_names <- c(
   "liver_hx_hepatitis" = "hepatitis",
   "liver_hx_liver_transplant" = "liver Tx",
   "liver_hx_abnormal_liver_function_test" = "abnormal LFT",
+  "smoking_use_Past" = "past smoking",
+  "smoking_use_Current" = "current smoking",
   # custom variable
-  "lung_hx_copd_emphysema_bronchitis" = "COPD (incl. Em/Br)"
+  "lung_hx_copd_emphysema_bronchitis" = "COPD (incl. Em/Br)",
+  "guidelines" = "COPD (incl. Em/Br) / cirrhosis"
 )
