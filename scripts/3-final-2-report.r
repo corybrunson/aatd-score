@@ -1,5 +1,9 @@
 #' Report results using testing data
 
+#' NB: Code in `3-final-1-evaluate.r` has been revised since the final models
+#' were obtained, and this script has not been updated to handle the
+#' differently-formatted data that results from this revision. -JCB
+
 library(tidyverse)
 library(tidymodels)
 
