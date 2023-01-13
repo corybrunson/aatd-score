@@ -963,6 +963,12 @@ eval_cands %>%
 
 ```{r plot separate ROC curves with score labels, fig.height=8}
 eval_cands %>%
+  select(candidate, cutoff) %>%
+  unnest(cutoff) %>%
+  select(-.threshold) %>%
+  mutate(cutoff = TRUE) ->
+  cand_cutoffs
+eval_cands %>%
   mutate(predictions = map(
     predictions,
     ~ rename_with(., function(x) str_remove(x, "^geno_"))
@@ -971,18 +977,37 @@ eval_cands %>%
   mutate(class = factor(class, c("Normal", "Abnormal"))) %>%
   group_by(candidate) %>%
   roc_curve(truth = class, estimate = score, event_level = "second") %>%
+  ungroup() %>%
+  # identify cutoff values
+  left_join(cand_cutoffs, by = c("candidate", "specificity", "sensitivity")) %>%
+  mutate(cutoff = ifelse(is.na(cutoff), FALSE, cutoff)) %>%
+  # prepare labels
   mutate(label = case_when(
-    .threshold == -Inf ~ "-∞",
-    .threshold == Inf ~ "+∞",
+    .threshold == -Inf ~ "", #"-∞",
+    .threshold == Inf ~ "", #"+∞",
     TRUE ~ as.character(.threshold)
   )) %>%
   ggplot(aes(x = specificity, y = sensitivity)) +
   facet_wrap(facets = vars(candidate)) +
   coord_equal() +
   geom_path() +
-  geom_text(aes(label = label), hjust = "left", vjust = "bottom") +
+  geom_text(
+    data = ~ filter(., ! cutoff),
+    aes(label = label), hjust = "left", vjust = "bottom"
+  ) +
+  geom_label(
+    data = ~ filter(., cutoff),
+    aes(label = label, hjust = "left", vjust = "bottom")
+  ) +
   geom_abline(intercept = 1, slope = -1, lty = 3) +
-  labs(color = NULL)
+  labs(color = NULL) ->
+  eval_cands_roc_facet
+print(eval_cands_roc_facet)
+ggsave(
+  here::here("fig/report-eval-cand-roc-facet.pdf"),
+  eval_cands_roc_facet,
+  width = textwidth, height = textwidth * 0.7
+)
 ```
 
 ### Screening thresholds
@@ -1050,6 +1075,43 @@ eval_cands %>%
   `names<-`(eval_cands$candidate) %>%
   lapply(knitr::kable, align = "lrr",
          format = "html", table.attr = "style='width:30%;'")
+```
+
+```{r, results='asis'}
+eval_cands %>%
+  unnest(cutoff) %>%
+  unnest(predictions) %>%
+  # OOPS
+  mutate(class = ifelse(
+    is.na(class),
+    as.character(geno_class),
+    as.character(class)
+  )) %>%
+  mutate(class = factor(class, c("Normal", "Abnormal"))) %>%
+  group_by(candidate) %>%
+  mutate(
+    .pred_class = factor(
+      ifelse(.pred_Abnormal >= .threshold, "Abnormal", "Normal"),
+      levels = levels(class)
+    )
+  ) %>%
+  count(candidate, class, .pred_class) %>%
+  transmute(
+    Candidate = candidate, Genotype = class,
+    Amount = str_c(
+      n, " (",
+      format(round(n / sum(n), digits = 4L) * 100, digits = 2L),
+      "%)"
+    ),
+    Screen = factor(ifelse(.pred_class == "Normal", "No", "Yes"),
+                    levels = c("No", "Yes"))
+  ) %>%
+  ungroup() %>%
+  pivot_wider(c(Candidate, Screen),
+              names_from = Genotype, values_from = Amount) %>%
+  mutate(Candidate = ifelse(row_number() %% 2L == 1L, Candidate, "")) %>%
+  knitr::kable(align = "llrr",
+               format = "html", table.attr = "style='width:40%'")
 ```
 
 ### Additional ZZ cases recovered by inclusion of smoking history
