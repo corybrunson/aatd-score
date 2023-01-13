@@ -65,3 +65,7 @@ pred_names <- c(
   "lung_hx_copd_emphysema_bronchitis" = "COPD (incl. Em/Br)",
   "guidelines" = "COPD (incl. Em/Br) / cirrhosis"
 )
+
+# figure dimensions (cm)
+textwidth <- 10
+phi <- (1 + sqrt(5)) / 2
