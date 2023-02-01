@@ -567,7 +567,15 @@ $$p = \frac{1}{1 + \exp(s)}$$
 ### Final evaluation
 
 ```{r read in final model evaluations}
-eval_data <- read_rds(here::here("data/aatd-3-eval-final.rds"))
+here::here("data/aatd-3-eval-final.rds") %>%
+  read_rds() %>%
+  # remove duplicate COPD model
+  distinct() ->
+  eval_data
+if (! "geno_class" %in% names(eval_data$predictions[[1L]])) {
+  eval_data$predictions[[1L]] <-
+    rename(eval_data$predictions[[1L]], geno_class = class)
+}
 ```
 
 We evaluate the selected model specifications (families and hyperparameter sets) by first fitting them to the entire $\frac{4}{5}$ training set from the second phase and then evaluating their predictions on the remaining $\frac{1}{5}$ testing set.
@@ -727,9 +735,7 @@ eval_data %>%
     model == "FasterRisk" ~
       str_c("FR #", number, " (terms ≤ ", n_terms,
             "; bound = ", abs_bound, ")")
-  )) %>%
-  # remove duplicate COPD model
-  distinct() ->
+  )) ->
   eval_points
 ```
 
@@ -756,7 +762,7 @@ Areas under the ROC curve are reported in the rightmost column.
 eval_points_med %>%
   # sort by largest coefficients
   mutate(item = fct_rev(fct_reorder(item, points, function(x) max(abs(x))))) %>%
-  pivot_wider(c(model, specification, number, AUROC),
+  pivot_wider(id_cols = c(model, specification, number, AUROC),
               names_from = item, values_from = points, names_sort = TRUE) %>%
   # remove items that are never used
   select(where(~ ! all(. == 0))) %>%
@@ -815,7 +821,7 @@ eval_points %>%
 eval_points_smoke %>%
   # sort by largest coefficients
   mutate(item = fct_rev(fct_reorder(item, points, function(x) max(abs(x))))) %>%
-  pivot_wider(c(model, specification, number, AUROC),
+  pivot_wider(id_cols = c(model, specification, number, AUROC),
               names_from = item, values_from = points, names_sort = TRUE) %>%
   # remove items that are never used
   select(where(~ ! all(. == 0))) %>%
@@ -887,7 +893,7 @@ eval_cands %>%
   mutate(item = pred_names[item]) %>%
   mutate(points = as.integer(points)) %>%
   mutate(item = factor(item, levels = unname(pred_names))) %>%
-  pivot_wider(c(candidate, AUROC),
+  pivot_wider(id_cols = c(candidate, AUROC),
               names_from = item, values_from = points, names_sort = TRUE) %>%
   # sort by largest coefficients
   arrange(candidate) %>%
@@ -1068,7 +1074,7 @@ eval_cands %>%
                     levels = c("No", "Yes"))
   ) %>%
   ungroup() %>%
-  pivot_wider(c(Candidate, Screen),
+  pivot_wider(id_cols = c(Candidate, Screen),
               names_from = Genotype, values_from = Amount) %>%
   nest(table = -c(Candidate)) %>%
   pull(table) %>%
@@ -1107,11 +1113,48 @@ eval_cands %>%
                     levels = c("No", "Yes"))
   ) %>%
   ungroup() %>%
-  pivot_wider(c(Candidate, Screen),
+  pivot_wider(id_cols = c(Candidate, Screen),
               names_from = Genotype, values_from = Amount) %>%
   mutate(Candidate = ifelse(row_number() %% 2L == 1L, Candidate, "")) %>%
   knitr::kable(align = "llrr",
                format = "html", table.attr = "style='width:40%'")
+```
+
+### Additional ZZ cases recovered by proposed risk score versus COPD
+
+```{r}
+eval_cands %>%
+  filter(candidate == "Candidate 0" | candidate == "Candidate 3") %>%
+  select(candidate, cutoff, predictions) %>%
+  unnest(cutoff) %>%
+  unnest(predictions) %>%
+  transmute(
+    record_id, candidate,
+    screen = ifelse(.pred_Abnormal >= .threshold, "Y", "N"),
+    genotype = geno_class
+  ) %>%
+  filter(genotype == "Abnormal") %>%
+  pivot_wider(names_from = candidate, values_from = screen) %>%
+  select(
+    record_id,
+    Dx = `Candidate 0`, Dx_smoke = `Candidate 3`
+  ) %>%
+  filter(Dx != Dx_smoke) %>%
+  arrange(Dx, Dx_smoke) %>%
+  left_join(read_rds(here::here("data/aatd-pred.rds")), by = "record_id") %>%
+  mutate(birth = year(date_of_birth), gender = str_sub(gender, 1L, 1L)) %>%
+  select(
+    birth, gender,
+    any_of(names(pred_names)), smoking_use,
+    Dx, Dx_smoke
+  ) %>%
+  select(-ends_with("_none")) %>%
+  mutate(across(
+    c(starts_with("lung_"), starts_with("liver_")),
+    as.integer
+  )) %>%
+  rename_with(~ pred_names[.], any_of(names(pred_names))) %>%
+  knitr::kable()
 ```
 
 ### Additional ZZ cases recovered by inclusion of smoking history
