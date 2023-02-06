@@ -1194,6 +1194,51 @@ eval_cands %>%
   knitr::kable()
 ```
 
+### Comparison of COPD, Hx-only, and Hx+smoking screening for ZZ cases
+
+```{r}
+library(ggalluvial)
+options(ggalluvial.reverse = FALSE)
+eval_cands %>%
+  filter(candidate == "Candidate 0" |
+           candidate == "Candidate 3" |
+           candidate == "Candidate 5") %>%
+  select(candidate, cutoff, predictions) %>%
+  unnest(cutoff) %>%
+  unnest(predictions) %>%
+  transmute(
+    record_id, candidate,
+    screen = ifelse(.pred_Abnormal >= .threshold, "Y", "N"),
+    genotype = geno_class
+  ) %>%
+  filter(genotype == "Abnormal") %>%
+  pivot_wider(id_cols = record_id,
+              names_from = candidate, values_from = screen) %>%
+  unite(col = "Pattern", starts_with("Candidate "), remove = FALSE) %>%
+  to_lodes_form(starts_with("Candidate "), key = "Model", value = "Screen") %>%
+  mutate(Model = fct_recode(
+    Model,
+    COPD = "Candidate 0",
+    History = "Candidate 3",
+    `History+Smoking` = "Candidate 5"
+  )) %>%
+  mutate(Screen = fct_recode(Screen, Yes = "Y", No = "N")) %>%
+  ggplot(aes(x = Model, stratum = Screen, alluvium = record_id)) +
+  geom_alluvium(aes(fill = Pattern), curve_type = "cubic") +
+  geom_stratum() +
+  geom_text(stat = "stratum", aes(label = Screen), size = 4) +
+  scale_fill_brewer(type = "qual") +
+  labs(x = NULL) +
+  guides(fill = "none") ->
+  eval_cands_plot
+print(eval_cands_plot)
+ggsave(
+  here::here("fig/report-eval-cand-alluvial.pdf"),
+  eval_cands_plot,
+  width = textwidth, height = textwidth * 0.6
+)
+```
+
 ## Patient prototypes
 
 We compute risk scores for a set of prototype patient histories and examine the relative contributions of the items that constitute the score.
