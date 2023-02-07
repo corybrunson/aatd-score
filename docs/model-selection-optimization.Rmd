@@ -1018,6 +1018,9 @@ ggsave(
 
 ### Screening thresholds
 
+The following table compares the sensitivity and specificty of each risk score, used as a screening tool with the optimized threshold.
+Recall that thresholds were optimized by selecting the specificity closest to that of our model of current screening guidelines.
+
 ```{r compare threshold performance}
 eval_cands %>%
   unnest(cutoff) %>%
@@ -1031,11 +1034,66 @@ eval_cands %>%
     cutoff - referent_risk, cutoff
   )) %>%
   transmute(
-    Candidate = candidate,
-    `Score cutoff` = as.integer(cutoff), `Risk cutoff` = .threshold,
+    Candidate = str_c(candidate, " (screen ≥ ", cutoff, ")"),
+    `Risk` = .threshold,
     Sensitivity = sensitivity, Specificity = specificity
   ) %>%
   mutate(across(
+    where(is.double),
+    ~ str_c(format(round(., digits = 4L) * 100, digits = 4L), "%")
+  )) %>%
+  knitr::kable(format = "html", table.attr = "style='width:50%;'")
+```
+
+This table compares the sensitivity and specificity of only the current screening guidelines and the final risk scores, but considers thresholds with specificity on either side of the specificity of current guidelines.
+
+```{r compare two-sided threshold performance}
+eval_cands %>%
+  filter(candidate == "Candidate 0") %>%
+  select(cutoff) %>% unnest(cutoff) %>%
+  pull(specificity) ->
+  copd_specificity
+eval_cands %>%
+  filter(candidate == "Candidate 0" |
+           candidate == "Candidate 3" | candidate == "Candidate 5") %>%
+  # identify scores on either side of COPD specificity
+  mutate(roc = map(
+    predictions,
+    roc_curve, truth = geno_class, score, event_level = "second"
+  )) %>%
+  unnest(roc) %>%
+  mutate(spec_sign = sign(specificity - copd_specificity)) %>%
+  group_by(model, predictors, response, spec_sign) %>%
+  mutate(cutoff = case_when(
+    model == "COPD" & .threshold == 1 ~ TRUE,
+    model == "COPD" ~ FALSE,
+    spec_sign == -1L ~ specificity == max(specificity),
+    spec_sign == 1L ~ specificity == min(specificity),
+    TRUE ~ TRUE
+  )) %>%
+  # select(.threshold, specificity, sensitivity, cutoff) %>% filter(cutoff)
+  filter(cutoff) %>%
+  ungroup() %>%
+  # OOPS: correct scores
+  mutate(score_risk = if_else(
+    referent_risk %% 1 == 0,
+    map2(score_risk, referent_risk, ~ transmute(.x, score = score - .y, risk)),
+    map(score_risk, ~ select(., score, risk))
+  )) %>%
+  mutate(score_risk = map2(
+    .threshold, score_risk,
+    ~ filter(.y, score == .x)
+  )) %>%
+  # select(score_risk) %>% unnest(score_risk)
+  unnest(score_risk) %>%
+  transmute(
+    Candidate = str_c(candidate, " (screen ≥ ", score, ")"),
+    # `Score` = as.integer(score),
+    `Risk` = risk,
+    Sensitivity = sensitivity, Specificity = specificity
+  ) %>%
+  mutate(across(
+    # c(Sensitivity, Specificity),
     where(is.double),
     ~ str_c(format(round(., digits = 4L) * 100, digits = 4L), "%")
   )) %>%
