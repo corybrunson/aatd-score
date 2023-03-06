@@ -102,6 +102,8 @@ aatd_jidm <- jSDM_binomial_probit(
 )
 plot_residual_cor(aatd_jidm)
 aatd_jidmcor <- get_residual_cor(aatd_jidm)
+write_rds(aatd_jidmcor, here::here("data/aatd-0-jidmcor.rds"))
+
 aatd_jidmcor$cov.median %>%
   as.data.frame() %>%
   set_names(pred_names[match(names(.), names(pred_names))]) %>%
