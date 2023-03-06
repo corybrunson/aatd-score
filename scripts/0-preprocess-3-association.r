@@ -104,7 +104,10 @@ plot_residual_cor(aatd_jidm)
 aatd_jidmcor <- get_residual_cor(aatd_jidm)
 write_rds(aatd_jidmcor, here::here("data/aatd-0-jidmcor.rds"))
 
-aatd_jidmcor$cov.median %>%
+aatd_jidmcor <- read_rds(here::here("data/aatd-0-jidmcor.rds"))
+
+# covariance monoplot
+aatd_jidmcor$cov.mean %>%
   as.data.frame() %>%
   set_names(pred_names[match(names(.), names(pred_names))]) %>%
   `rownames<-`(pred_names[match(rownames(.), names(pred_names))]) %>%
@@ -113,14 +116,20 @@ aatd_jidmcor$cov.median %>%
   as_tbl_ord() %>%
   augment_ord() %>%
   confer_inertia(1) ->
-  aatd_jidmcor_eigen
-aatd_jidmcor_eigen %>%
+  aatd_jidmcov_eigen
+aatd_jidmcov_eigen %>%
   ggbiplot() +
   theme_void() +
   geom_unit_circle(segments = 120L) +
   geom_rows_vector() +
   geom_rows_text_radiate(aes(label = name)) +
-  lims(x = c(-1, 1), y = c(-1, 1))
+  lims(x = c(-1, 1), y = c(-1, 1)) ->
+  aatd_jidmcov_biplot
+print(aatd_jidmcov_biplot)
+ggsave(
+  here::here("fig/aatd-dx-jidmcov.pdf"), aatd_jidmcov_biplot,
+  height = 6, width = 6
+)
 
 # https://theoreticalecology.github.io/s-jSDM/
 # aatd_sjidm <- sjSDM(
