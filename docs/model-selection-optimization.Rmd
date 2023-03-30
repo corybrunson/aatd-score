@@ -572,10 +572,18 @@ here::here("data/aatd-3-eval-final.rds") %>%
   # remove duplicate COPD model
   distinct() ->
   eval_data
-if (! "geno_class" %in% names(eval_data$predictions[[1L]])) {
-  eval_data$predictions[[1L]] <-
-    rename(eval_data$predictions[[1L]], geno_class = class)
+# if (! "geno_class" %in% names(eval_data$predictions[[1L]])) {
+#   eval_data$predictions[[1L]] <-
+#     rename(eval_data$predictions[[1L]], geno_class = "class")
+# }
+for (r in seq(nrow(eval_data))) {
+  if (! "geno_class" %in% names(eval_data$predictions[[r]])) {
+    eval_data$predictions[[r]] <-
+      rename(eval_data$predictions[[r]], geno_class = "class")
+  }
 }
+pop_class <- eval_data$predictions[[1L]] %>% count(geno_class) %>% deframe()
+pop_risk <- pop_class[["Abnormal"]] / sum(pop_class)
 ```
 
 We evaluate the selected model specifications (families and hyperparameter sets) by first fitting them to the entire $\frac{4}{5}$ training set from the second phase and then evaluating their predictions on the remaining $\frac{1}{5}$ testing set.
@@ -923,30 +931,91 @@ for (r in seq(nrow(eval_cands))) {
     mutate(counts = map2(score, counts, ~ filter(.y, score == .x))) %>%
     mutate(counts = map(counts, ~ select(., screen))) %>%
     unnest(counts) %>%
+    mutate(rel_risk = risk / pop_risk) %>%
     transmute(
       Score = str_c(
         score, ifelse(risk >= .threshold & lag(risk < .threshold), "*", "")
       ),
       Risk = str_c(
-        format(round(risk, digits = 3L) * 100, nsmall = 1L, trim = TRUE), "%"
+        format(round(risk, digits = 4L) * 100, nsmall = 1L, trim = TRUE), "%"
       ),
       Screen = str_c(
-        format(round(screen, digits = 3L) * 100, nsmall = 1L), "%"
-      )
+        format(round(screen, digits = 4L) * 100, nsmall = 1L), "%"
+      ),
+      RR = format(round(rel_risk, digits = 2L))
     ) %>%
     knitr::kable(
-      align = "lrr",
+      align = "lrrr",
       caption = eval_cands$candidate[[r]],
       label = NA,
-      format = "html", table.attr = "style='width:30%;'"
+      format = "html", table.attr = "style='width:40%;'"
     ) %>%
     print()
 }
 ```
 
+### Final models
+
+In this section we examine our single preferred model for each predictor set---medical history--only and medical-and-smoking-history.
+
+```{r}
+eval_cands %>%
+  filter(candidate == "Candidate 0") %>%
+  select(cutoff) %>% unnest(cutoff) %>%
+  pull(specificity) ->
+  copd_specificity
+eval_cands %>%
+  filter(candidate == "Candidate 0" |
+           candidate == "Candidate 3" | candidate == "Candidate 5") %>%
+  mutate(candidate = case_when(
+    candidate == "Candidate 0" ~ "Guidelines",
+    candidate == "Candidate 3" ~ "Medical only",
+    candidate == "Candidate 5" ~ "Medical + Smoking"
+  )) %>%
+  mutate(candidate = fct_inorder(candidate)) %>%
+  # pull(predictions) %>% {.[[1]]} %>% pull(geno_class) %>% levels()
+  # OOPS
+  mutate(predictions = map(
+    predictions,
+    mutate, geno_class = factor(geno_class, c("Normal", "Abnormal"))
+  )) %>%
+  # identify scores on either side of COPD specificity
+  mutate(roc = map(
+    predictions,
+    roc_curve, truth = geno_class, score, event_level = "second"
+  )) %>%
+  unnest(roc) %>%
+  mutate(spec_sign = sign(specificity - copd_specificity)) %>%
+  group_by(model, predictors, response, spec_sign) %>%
+  mutate(cutoff = case_when(
+    model == "COPD" & .threshold == 1 ~ TRUE,
+    model == "COPD" ~ FALSE,
+    spec_sign == -1L ~ specificity == max(specificity),
+    spec_sign == 1L ~ specificity == min(specificity),
+    TRUE ~ TRUE
+  )) %>%
+  # select(.threshold, specificity, sensitivity, cutoff) %>% filter(cutoff)
+  filter(cutoff) %>%
+  ungroup() %>%
+  # OOPS: correct scores
+  mutate(score_risk = if_else(
+    referent_risk %% 1 == 0,
+    map2(score_risk, referent_risk, ~ transmute(.x, score = score - .y, risk)),
+    map(score_risk, ~ select(., score, risk))
+  )) %>%
+  mutate(score_risk = map2(
+    .threshold, score_risk,
+    ~ filter(.y, score == .x)
+  )) %>%
+  # select(score_risk) %>% unnest(score_risk)
+  unnest(score_risk) %>%
+  rename_with(~ str_c("cutoff_", .), c(score, risk)) ->
+  eval_cands_2side
+```
+
 ### ROC curves
 
-```{r compare overall performance}
+```{r compare overall performance, eval=FALSE}
 eval_cands %>%
   mutate(predictions = map(
     predictions,
@@ -958,8 +1027,8 @@ eval_cands %>%
   roc_curve(truth = class, estimate = score, event_level = "second") %>%
   ggplot(aes(x = specificity, y = sensitivity, group = candidate)) +
   coord_equal() +
-  geom_path(aes(color = candidate)) +
   geom_abline(intercept = 1, slope = -1, lty = 3) +
+  geom_path(aes(color = candidate)) +
   scale_color_manual(values = c("black", RColorBrewer::brewer.pal(
     n = length(candidates_med) + length(candidates_smoke),
     name = "Dark2"
@@ -967,7 +1036,7 @@ eval_cands %>%
   labs(color = NULL)
 ```
 
-```{r plot separate ROC curves with score labels, fig.height=8}
+```{r plot separate ROC curves with score labels, fig.height=8, eval=FALSE}
 eval_cands %>%
   select(candidate, cutoff) %>%
   unnest(cutoff) %>%
@@ -1016,6 +1085,74 @@ ggsave(
 )
 ```
 
+```{r compare overall performance of final models}
+eval_cands_2side %>%
+  mutate(predictions = map(
+    predictions,
+    ~ rename_with(., function(x) str_remove(x, "^geno_"))
+  )) %>%
+  unnest(predictions) %>%
+  mutate(class = factor(class, c("Normal", "Abnormal"))) %>%
+  group_by(candidate) %>%
+  roc_curve(truth = class, estimate = score, event_level = "second") %>%
+  ggplot(aes(x = specificity, y = sensitivity, group = candidate)) +
+  coord_equal() +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
+  geom_path(aes(color = candidate)) +
+  geom_point(aes(color = candidate)) +
+  scale_color_manual(values = c("black", RColorBrewer::brewer.pal(
+    n = length(eval_cands_2side$candidate) - 1L,
+    name = "Dark2"
+  ))) +
+  labs(color = NULL)
+```
+
+```{r plot separate ROC curves for final models with score labels, fig.height=4}
+eval_cands_2side %>%
+  select(candidate, cutoff_score, specificity, sensitivity, cutoff) ->
+  cand_cutoffs
+eval_cands_2side %>%
+  mutate(predictions = map(
+    predictions,
+    ~ rename_with(., function(x) str_remove(x, "^geno_"))
+  )) %>%
+  unnest(predictions) %>%
+  mutate(class = factor(class, c("Normal", "Abnormal"))) %>%
+  group_by(candidate) %>%
+  roc_curve(truth = class, estimate = score, event_level = "second") %>%
+  ungroup() %>%
+  # identify cutoff values
+  left_join(cand_cutoffs, by = c("candidate", "specificity", "sensitivity")) %>%
+  mutate(cutoff = ifelse(is.na(cutoff), FALSE, cutoff)) %>%
+  # prepare labels
+  mutate(label = case_when(
+    .threshold == -Inf ~ "", #"-∞",
+    .threshold == Inf ~ "", #"+∞",
+    TRUE ~ as.character(.threshold)
+  )) %>%
+  ggplot(aes(x = specificity, y = sensitivity)) +
+  facet_wrap(facets = vars(candidate)) +
+  coord_equal() +
+  geom_path() +
+  geom_text(
+    data = ~ filter(., ! cutoff),
+    aes(label = label), hjust = "left", vjust = "bottom"
+  ) +
+  geom_label(
+    data = ~ filter(., cutoff),
+    aes(label = label, hjust = "left", vjust = "bottom")
+  ) +
+  geom_abline(intercept = 1, slope = -1, lty = 3) +
+  labs(color = NULL) ->
+  eval_cands_roc_facet
+print(eval_cands_roc_facet)
+ggsave(
+  here::here("fig/report-eval-cand-roc-facet.pdf"),
+  eval_cands_roc_facet,
+  width = textwidth, height = textwidth * 0.4
+)
+```
+
 ### Screening thresholds
 
 The following table compares the sensitivity and specificty of each risk score, used as a screening tool with the optimized threshold.
@@ -1048,48 +1185,11 @@ eval_cands %>%
 This table compares the sensitivity and specificity of only the current screening guidelines and the final risk scores, but considers thresholds with specificity on either side of the specificity of current guidelines.
 
 ```{r compare two-sided threshold performance}
-eval_cands %>%
-  filter(candidate == "Candidate 0") %>%
-  select(cutoff) %>% unnest(cutoff) %>%
-  pull(specificity) ->
-  copd_specificity
-eval_cands %>%
-  filter(candidate == "Candidate 0" |
-           candidate == "Candidate 3" | candidate == "Candidate 5") %>%
-  # identify scores on either side of COPD specificity
-  mutate(roc = map(
-    predictions,
-    roc_curve, truth = geno_class, score, event_level = "second"
-  )) %>%
-  unnest(roc) %>%
-  mutate(spec_sign = sign(specificity - copd_specificity)) %>%
-  group_by(model, predictors, response, spec_sign) %>%
-  mutate(cutoff = case_when(
-    model == "COPD" & .threshold == 1 ~ TRUE,
-    model == "COPD" ~ FALSE,
-    spec_sign == -1L ~ specificity == max(specificity),
-    spec_sign == 1L ~ specificity == min(specificity),
-    TRUE ~ TRUE
-  )) %>%
-  # select(.threshold, specificity, sensitivity, cutoff) %>% filter(cutoff)
-  filter(cutoff) %>%
-  ungroup() %>%
-  # OOPS: correct scores
-  mutate(score_risk = if_else(
-    referent_risk %% 1 == 0,
-    map2(score_risk, referent_risk, ~ transmute(.x, score = score - .y, risk)),
-    map(score_risk, ~ select(., score, risk))
-  )) %>%
-  mutate(score_risk = map2(
-    .threshold, score_risk,
-    ~ filter(.y, score == .x)
-  )) %>%
-  # select(score_risk) %>% unnest(score_risk)
-  unnest(score_risk) %>%
+eval_cands_2side %>%
   transmute(
-    Candidate = str_c(candidate, " (screen ≥ ", score, ")"),
+    Candidate = str_c(candidate, " (screen ≥ ", cutoff_score, ")"),
     # `Score` = as.integer(score),
-    `Risk` = risk,
+    `Risk` = cutoff_risk,
     Sensitivity = sensitivity, Specificity = specificity
   ) %>%
   mutate(across(
@@ -1102,7 +1202,7 @@ eval_cands %>%
 
 ### Detection tables
 
-```{r, results='asis'}
+```{r, results='asis', eval=FALSE}
 eval_cands %>%
   unnest(cutoff) %>%
   unnest(predictions) %>%
@@ -1141,7 +1241,7 @@ eval_cands %>%
          format = "html", table.attr = "style='width:30%;'")
 ```
 
-```{r, results='asis'}
+```{r, results='asis', eval=FALSE}
 eval_cands %>%
   unnest(cutoff) %>%
   unnest(predictions) %>%
@@ -1176,6 +1276,76 @@ eval_cands %>%
   mutate(Candidate = ifelse(row_number() %% 2L == 1L, Candidate, "")) %>%
   knitr::kable(align = "llrr",
                format = "html", table.attr = "style='width:40%'")
+```
+
+The following tables summarize screening recommendations based on the two candidate models (plus COPD-based guidelines):
+
+```{r, results='asis'}
+eval_cands_2side %>%
+  unnest(predictions) %>%
+  mutate(geno_class = factor(geno_class, c("Normal", "Abnormal"))) %>%
+  group_by(candidate) %>%
+  # select(contains(".pred"), cutoff_risk, .threshold)
+  mutate(
+    .pred_class = factor(
+      ifelse(.pred_Abnormal >= cutoff_risk, "Abnormal", "Normal"),
+      levels = levels(geno_class)
+    )
+  ) %>%
+  count(candidate, cutoff_score, geno_class, .pred_class) %>%
+  group_by(candidate, cutoff_score) %>%
+  transmute(
+    Candidate = str_c(candidate, " (screen ≥ ", cutoff_score, ")"),
+    Genotype = geno_class,
+    Amount = str_c(
+      n, " (",
+      format(round(n / sum(n), digits = 4L) * 100, digits = 2L),
+      "%)"
+    ),
+    Screen = factor(ifelse(.pred_class == "Normal", "No", "Yes"),
+                    levels = c("No", "Yes"))
+  ) %>%
+  ungroup() %>%
+  pivot_wider(id_cols = c(Candidate, Screen),
+              names_from = Genotype, values_from = Amount) %>%
+  nest(table = -c(Candidate)) %>%
+  pull(table) %>%
+  `names<-`(eval_cands_2side$candidate) %>%
+  lapply(knitr::kable, align = "lrr",
+         format = "html", table.attr = "style='width:30%;'")
+```
+
+```{r, results='asis'}
+eval_cands_2side %>%
+  unnest(predictions) %>%
+  mutate(geno_class = factor(geno_class, c("Normal", "Abnormal"))) %>%
+  group_by(candidate) %>%
+  # select(contains(".pred"), cutoff_risk, .threshold)
+  mutate(
+    .pred_class = factor(
+      ifelse(.pred_Abnormal >= cutoff_risk, "Abnormal", "Normal"),
+      levels = levels(geno_class)
+    )
+  ) %>%
+  count(candidate, cutoff_score, geno_class, .pred_class) %>%
+  group_by(candidate, cutoff_score) %>%
+  transmute(
+    Candidate = str_c(candidate, " (screen ≥ ", cutoff_score, ")"),
+    Genotype = geno_class,
+    Amount = str_c(
+      n, " (",
+      format(round(n / sum(n), digits = 4L) * 100, digits = 2L),
+      "%)"
+    ),
+    Screen = factor(ifelse(.pred_class == "Normal", "No", "Yes"),
+                    levels = c("No", "Yes"))
+  ) %>%
+  ungroup() %>%
+  pivot_wider(id_cols = c(Candidate, Screen),
+              names_from = Genotype, values_from = Amount) %>%
+  mutate(Candidate = ifelse(row_number() %% 2L == 1L, Candidate, "")) %>%
+  knitr::kable(align = "llrr",
+               format = "html", table.attr = "style='width:50%'")
 ```
 
 ### Additional ZZ cases recovered by proposed risk score versus COPD
@@ -1254,9 +1424,15 @@ eval_cands %>%
 
 ### Comparison of COPD, Hx-only, and Hx+smoking screening for ZZ cases
 
-```{r}
+```{r ggalluvial settings}
 library(ggalluvial)
-options(ggalluvial.reverse = FALSE)
+options(ggalluvial.reverse = FALSE,
+        ggalluvial.lode.guidance = "zigzag")
+```
+
+The following alluvial plot tracks whether each ZZ case is flagged by each of three models: our model of conventional guidelines, and the two final risk scores with cutoffs closest in specificity to those guidelines.
+
+```{r alluvial plot of nearest COPD-based cutoffs}
 eval_cands %>%
   filter(candidate == "Candidate 0" |
            candidate == "Candidate 3" |
@@ -1277,8 +1453,8 @@ eval_cands %>%
   mutate(Model = fct_recode(
     Model,
     COPD = "Candidate 0",
-    History = "Candidate 3",
-    `History+Smoking` = "Candidate 5"
+    Medical = "Candidate 3",
+    `Medical+Smoking` = "Candidate 5"
   )) %>%
   mutate(Screen = fct_recode(Screen, Yes = "Y", No = "N")) %>%
   ggplot(aes(x = Model, stratum = Screen, alluvium = record_id)) +
@@ -1291,7 +1467,165 @@ eval_cands %>%
   eval_cands_plot
 print(eval_cands_plot)
 ggsave(
-  here::here("fig/report-eval-cand-alluvial.pdf"),
+  here::here("fig/report-eval-cand-alluvial-final.pdf"),
+  eval_cands_plot,
+  width = textwidth, height = textwidth * 0.6
+)
+```
+
+The next alluvial plot tracks whether the ZZ cases across the current guidelines and two cutofss of the medical history-only risk score, just below and just above the COPD guidelines in specificity.
+
+```{r alluvial plot of two-way COPD-based cutoffs for medical-only}
+eval_cands %>%
+  filter(candidate == "Candidate 0") %>%
+  select(cutoff) %>% unnest(cutoff) %>%
+  pull(specificity) ->
+  copd_specificity
+eval_cands %>%
+  filter(candidate == "Candidate 0" | candidate == "Candidate 3") %>%
+  # identify scores on either side of COPD specificity
+  mutate(roc = map(
+    predictions,
+    roc_curve, truth = geno_class, score, event_level = "second"
+  )) %>%
+  unnest(roc) %>%
+  mutate(spec_sign = sign(specificity - copd_specificity)) %>%
+  group_by(model, predictors, response, spec_sign) %>%
+  mutate(cutoff = case_when(
+    model == "COPD" & .threshold == 1 ~ TRUE,
+    model == "COPD" ~ FALSE,
+    spec_sign == -1L ~ specificity == max(specificity),
+    spec_sign == 1L ~ specificity == min(specificity),
+    TRUE ~ TRUE
+  )) %>%
+  # select(.threshold, specificity, sensitivity, cutoff) %>% filter(cutoff)
+  filter(cutoff) %>%
+  ungroup() %>%
+  # OOPS: correct scores
+  mutate(score_risk = if_else(
+    referent_risk %% 1 == 0,
+    map2(score_risk, referent_risk, ~ transmute(.x, score = score - .y, risk)),
+    map(score_risk, ~ select(., score, risk))
+  )) %>%
+  select(candidate, .threshold, predictions) %>%
+  unnest(predictions) %>%
+  filter(geno_class == "Abnormal") %>%
+  transmute(
+    record_id, candidate,
+    model = ifelse(
+      candidate == "Candidate 0", "Guidelines",
+      str_c("Medical", " (", .threshold, "+)")
+    ),
+    screen = ifelse(score >= .threshold, "Y", "N"),
+    genotype = geno_class
+  ) %>%
+  pivot_wider(id_cols = record_id,
+              names_from = model, values_from = screen) %>%
+  unite(col = "Pattern", -record_id, remove = FALSE) %>%
+  to_lodes_form(
+    c(Guidelines, starts_with("Medical")),
+    key = "Model", value = "Screen"
+  ) %>%
+  mutate(Model = fct_relevel(
+    Model,
+    "Medical (0+)",
+    "Guidelines",
+    "Medical (1+)"
+  )) %>%
+  mutate(Screen = fct_recode(Screen, Yes = "Y", No = "N")) %>%
+  ggplot(aes(x = Model, stratum = Screen, alluvium = record_id)) +
+  geom_alluvium(aes(fill = Pattern), curve_type = "cubic") +
+  geom_stratum() +
+  geom_text(stat = "stratum", aes(label = Screen), size = 4) +
+  scale_fill_brewer(type = "qual") +
+  labs(x = NULL) +
+  guides(fill = "none") ->
+  eval_cands_plot
+print(eval_cands_plot)
+ggsave(
+  here::here("fig/report-eval-cand-alluvial-twoside-medical.pdf"),
+  eval_cands_plot,
+  width = textwidth, height = textwidth * 0.6
+)
+```
+
+Finally, this alluvial plot tracks whether the ZZ cases across the same three screening rules as above but also those obtained from the two final models with cutoffs on the opposite side of the specificity of current guidelines.
+
+```{r alluvial plot of two-way COPD-based cutoffs}
+eval_cands %>%
+  filter(candidate == "Candidate 0") %>%
+  select(cutoff) %>% unnest(cutoff) %>%
+  pull(specificity) ->
+  copd_specificity
+eval_cands %>%
+  filter(candidate == "Candidate 0" |
+           candidate == "Candidate 3" | candidate == "Candidate 5") %>%
+  # identify scores on either side of COPD specificity
+  mutate(roc = map(
+    predictions,
+    roc_curve, truth = geno_class, score, event_level = "second"
+  )) %>%
+  unnest(roc) %>%
+  mutate(spec_sign = sign(specificity - copd_specificity)) %>%
+  group_by(model, predictors, response, spec_sign) %>%
+  mutate(cutoff = case_when(
+    model == "COPD" & .threshold == 1 ~ TRUE,
+    model == "COPD" ~ FALSE,
+    spec_sign == -1L ~ specificity == max(specificity),
+    spec_sign == 1L ~ specificity == min(specificity),
+    TRUE ~ TRUE
+  )) %>%
+  # select(.threshold, specificity, sensitivity, cutoff) %>% filter(cutoff)
+  filter(cutoff) %>%
+  ungroup() %>%
+  # OOPS: correct scores
+  mutate(score_risk = if_else(
+    referent_risk %% 1 == 0,
+    map2(score_risk, referent_risk, ~ transmute(.x, score = score - .y, risk)),
+    map(score_risk, ~ select(., score, risk))
+  )) %>%
+  select(candidate, .threshold, predictions) %>%
+  unnest(predictions) %>%
+  filter(geno_class == "Abnormal") %>%
+  transmute(
+    record_id, candidate,
+    model = case_when(
+      candidate == "Candidate 0" ~ "Guidelines",
+      candidate == "Candidate 3" ~ str_c("Medical", " (", .threshold, "+)"),
+      candidate == "Candidate 5" ~
+        str_c("Medical + Smoking", " (", .threshold, "+)")
+    ),
+    screen = ifelse(score >= .threshold, "Y", "N"),
+    genotype = geno_class
+  ) %>%
+  pivot_wider(id_cols = record_id,
+              names_from = model, values_from = screen) %>%
+  unite(col = "Pattern", -record_id, remove = FALSE) %>%
+  to_lodes_form(
+    c(Guidelines, starts_with("Medical")),
+    key = "Tool", value = "Screen"
+  ) %>%
+  mutate(Tool = fct_relevel(
+    Tool,
+    "Medical (0+)",
+    "Medical + Smoking (-1+)",
+    "Guidelines",
+    "Medical + Smoking (0+)",
+    "Medical (1+)"
+  )) %>%
+  mutate(Screen = fct_recode(Screen, Yes = "Y", No = "N")) %>%
+  ggplot(aes(x = Tool, stratum = Screen, alluvium = record_id)) +
+  geom_alluvium(aes(fill = Pattern), curve_type = "cubic") +
+  geom_stratum() +
+  geom_text(stat = "stratum", aes(label = Screen), size = 4) +
+  # scale_fill_brewer(type = "qual") +
+  labs(x = NULL) +
+  coord_flip() +
+  guides(fill = "none") ->
+  eval_cands_plot
+print(eval_cands_plot)
+ggsave(
+  here::here("fig/report-eval-cand-alluvial-twoside.pdf"),
   eval_cands_plot,
   width = textwidth, height = textwidth * 0.6
 )
