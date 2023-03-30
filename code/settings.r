@@ -63,6 +63,7 @@ pred_names <- c(
   "gender_Male" = "male", "gender_Female" = "female",
   "smoking_history_cigarette" = "smoking history",
   "any_tobacco_exposure" = "tobacco exposure",
+  "smoking_use" = "smoking use",
   "smoking_use_Past" = "past smoking",
   "smoking_use_Current" = "current smoking",
   # custom variable
