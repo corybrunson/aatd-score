@@ -915,40 +915,55 @@ The five models produce the following risk score tables.
 Each table matches each value of one risk score to the estimated probability of a patient with that score having a ZZ genotype.
 
 ```{r examine risk scores, results='asis'}
+revsum <- function(x) rev(cumsum(rev(x)))
 for (r in seq(nrow(eval_cands))) {
+  # compute for one slice at a time
   eval_cands %>%
-    slice(r) %>%
+    slice(r) ->
+    eval_cands_slice
+  # calculate percentage of the population screened at each threshold
+  eval_cands_slice$predictions[[1L]] %>%
+    count(score) %>%
+    mutate(screen = revsum(n) / sum(n)) %>%
+    select(-n) ->
+    eval_screen
+  # calculate total number of cases screened using each threshold
+  eval_cands_slice$predictions[[1L]] %>%
+    count(score, geno_class) %>%
+    pivot_wider(names_from = geno_class, values_from = n, values_fill = 0L) %>%
+    mutate(across(-score, revsum)) %>%
+    mutate(across(-score, ~ format(., big.mark = ","))) ->
+    eval_cases
+  # pre-process and bind above calculations
+  eval_cands_slice %>%
     unnest(score_risk) %>%
     mutate(score = ifelse(
       model == "FasterRisk",
       score - referent_risk, score
     )) %>%
     unnest(cutoff) %>%
-    mutate(counts = map(predictions, ~ count(., score))) %>%
-    mutate(counts = map(counts, ~ arrange(., desc(score)))) %>%
-    mutate(counts = map(counts, ~ mutate(., screen = cumsum(n) / sum(n)))) %>%
-    mutate(counts = map(counts, ~ arrange(., score))) %>%
-    mutate(counts = map2(score, counts, ~ filter(.y, score == .x))) %>%
-    mutate(counts = map(counts, ~ select(., screen))) %>%
-    unnest(counts) %>%
+    inner_join(eval_screen, by = "score") %>%
+    inner_join(eval_cases, by = "score") %>%
     mutate(rel_risk = risk / pop_risk) %>%
     transmute(
-      Score = str_c(
-        score, ifelse(risk >= .threshold & lag(risk < .threshold), "*", "")
-      ),
+      # Score = str_c(
+      #   score, ifelse(risk >= .threshold & lag(risk < .threshold), "*", "")
+      # ),
+      Score = str_replace(format(score), "-", "\u2013"),
       Risk = str_c(
         format(round(risk, digits = 4L) * 100, nsmall = 1L, trim = TRUE), "%"
       ),
+      RR = format(round(rel_risk, digits = 2L)),
       Screen = str_c(
         format(round(screen, digits = 4L) * 100, nsmall = 1L), "%"
       ),
-      RR = format(round(rel_risk, digits = 2L))
+      Normal, Abnormal
     ) %>%
     knitr::kable(
-      align = "lrrr",
+      align = "rrrrrr",
       caption = eval_cands$candidate[[r]],
       label = NA,
-      format = "html", table.attr = "style='width:40%;'"
+      format = "html", table.attr = "style='width:60%;'"
     ) %>%
     print()
 }
@@ -1123,6 +1138,9 @@ eval_cands_2side %>%
   ungroup() %>%
   # identify cutoff values
   left_join(cand_cutoffs, by = c("candidate", "specificity", "sensitivity")) %>%
+  # shift scores so that minimum total is zero for each
+  group_by(candidate) %>% mutate(min_total = min(setdiff(.threshold, -Inf))) %>%
+  mutate(across(c(.threshold, cutoff_score), ~ . - min_total)) %>%
   mutate(cutoff = ifelse(is.na(cutoff), FALSE, cutoff)) %>%
   # prepare labels
   mutate(label = case_when(
