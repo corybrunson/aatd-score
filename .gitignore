@@ -4,6 +4,10 @@
 # R project
 .Rproj.user
 
+# draft documents
+**/*.pptx
+**/*.docx
+
 # raw & rendered files
 data-raw/
 ref/
