@@ -45,6 +45,6 @@ The third and final round of analysis (the scripts '3-*.r') fitted the optimized
 
 ## Contact
 
-Please email Cory Brunson (@corybrunson) with any question about the analysis and code.
+Please email [Cory Brunson](https://github.com/corybrunson/) with any question about the analysis and code.
 
 [^1]: [Riley EL, Brunson JC, Eydgahi S, Brantly ML, Lascano JE. Development of a risk score to increase detection of severe alpha-1 antitrypsin deficiency. _ERJ Open Res_. 2023 Sep 18;9(5):00302-2023. doi: 10.1183/23120541.00302-2023. PMID: 37727673; PMCID: PMC10505949.](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10505949/)
